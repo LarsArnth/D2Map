@@ -957,15 +957,32 @@ local function BindToggle(key)
     return true
 end
 
--- Lægger Alt+M på toggle første gang – men kun hvis hverken tasten eller
--- bindingen er i brug, og aldrig igen, så et fravalg i menuen bliver respekteret.
+-- Findes den handling, en tast peger på, stadig? En tast kan blive hængende på
+-- en addon, der er slået fra eller slettet (fx "DandyMap_AUTOMAP"); så gør den
+-- ingenting, og vi må gerne bruge den.
+local function BindingCommandExists(command)
+    if type(command) ~= "string" then return true end
+    -- Klik, spells, makroer og ting er gyldige uden at stå på listen.
+    if command:find("^CLICK ") or command:find("^SPELL ") or command:find("^MACRO ") or command:find("^ITEM ") then
+        return true
+    end
+    if not (GetNumBindings and GetBinding) then return true end      -- kan ikke afgøres: regn den for i brug
+    for i = 1, GetNumBindings() do
+        if GetBinding(i) == command then return true end
+    end
+    return false
+end
+
+-- Lægger Alt+M på toggle første gang – men kun hvis tasten er ledig (eller
+-- peger på en addon, der ikke findes længere), og aldrig igen, så et fravalg i
+-- menuen bliver respekteret.
 local function OfferDefaultBinding()
     if db.bindingOffered or not (SetBinding and GetBindingKey and GetBindingAction) then return end
     if InCombatLockdown and InCombatLockdown() then return end       -- prøv igen næste gang
     db.bindingOffered = true
     if GetBindingKey("D2MAP_TOGGLE") then return end
     local current = GetBindingAction("ALT-M")
-    if current and current ~= "" then
+    if current and current ~= "" and BindingCommandExists(current) then
         -- Tasten er optaget (fx af et andet automap): tag den ikke, men sig det.
         Print("Alt+M is already bound to " .. tostring(current)
             .. ". Type /d2map bind to take it over, or pick a key under Key Bindings > D2Map.")

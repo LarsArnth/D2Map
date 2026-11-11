@@ -131,6 +131,10 @@ function GetBindingKey(navn) for tast, n in pairs(bindinger) do if n == navn the
 function GetBindingAction(tast) return bindinger[tast] or "" end
 function SetBinding(tast, navn) bindinger[tast] = navn return true end
 function GetCurrentBindingSet() return 1 end
+-- De handlinger, spillet kender lige nu (indbyggede + indlæste addons).
+local kendteHandlinger = { "TOGGLEWORLDMAP", "D2MAP_TOGGLE", "D2MAP_ZOOMIN", "D2MAP_ZOOMOUT" }
+function GetNumBindings() return #kendteHandlinger end
+function GetBinding(i) return kendteHandlinger[i], "kategori" end
 local gemtBindinger = 0
 function SaveBindings() gemtBindinger = gemtBindinger + 1 end
 
@@ -366,7 +370,18 @@ kor(1.2)
 tjek("en registreret adapter kan vælges og tegner", pinVed(0, 20 * px) ~= nil)
 slash("source auto")
 
+print("Tastaturgenvej, når Alt+M peger på en addon, der er slået fra")
+bindinger["ALT-M"] = "DandyMap_AUTOMAP"                -- DandyMap er ikke indlæst: handlingen findes ikke
+D2MapDB.bindingOffered = false
+fyr("PLAYER_ENTERING_WORLD")
+tjek("en forældet Alt+M-binding overtages", bindinger["ALT-M"] == "D2MAP_TOGGLE" and D2MapDB.bindingOffered == true)
+bindinger["ALT-M"] = "MACRO Mount"
+D2MapDB.bindingOffered = false
+fyr("PLAYER_ENTERING_WORLD")
+tjek("en makro på Alt+M bliver ikke taget", bindinger["ALT-M"] == "MACRO Mount")
+
 print("Tastaturgenvej, når Alt+M er optaget")
+kendteHandlinger[#kendteHandlinger + 1] = "DandyMap_AUTOMAP"   -- nu er DandyMap indlæst
 bindinger["ALT-M"] = "DandyMap_AUTOMAP"
 D2MapDB.bindingOffered = false
 fyr("PLAYER_ENTERING_WORLD")

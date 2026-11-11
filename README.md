@@ -7,7 +7,7 @@ bevægelse og targeting går lige igennem.
 
 ```sh
 ./installer.sh        # kopierer D2Map/ ind i spillets AddOns-mappe
-lua test/koer.lua     # 61 tjek mod en attrap af WoW's API
+lua test/koer.lua     # 63 tjek mod en attrap af WoW's API
 ```
 
 Første gang skal spillet genstartes helt; derefter er `/reload` nok.
@@ -34,7 +34,8 @@ Første gang skal spillet genstartes helt; derefter er `/reload` nok.
 
 `/automap` er det samme som `/d2map`. Tastaturgenveje ligger under
 **Key Bindings → D2Map** (toggle, zoom ind, zoom ud). Alt+M lægges på toggle
-første gang, **hvis tasten er ledig**; er den optaget, siger addon'en det, og
+første gang, **hvis tasten er ledig** – eller peger på en addon, der er slået
+fra eller slettet. Er den optaget af noget, der findes, siger addon'en det, og
 `/d2map bind` overtager den.
 
 Indstillingerne gemmes pr. figur i `D2MapDB`.
@@ -115,3 +116,5 @@ slået til. Sker der en fejl i opdateringsløkken, skriver addon'en den én gang
 chatten og stopper, i stedet for ti fejl i sekundet.
 
 DandyMap har sit eget automap på Alt+M. Kører begge, ligger de oven i hinanden.
+Lars slog DandyMap fra 2026-11-11 (mappen ligger der stadig); tasten stod
+tilbage på `DandyMap_AUTOMAP`, og D2Map overtager den ved første login.
