@@ -13,7 +13,7 @@
 --   5. Terræn (minimap-fliser)
 --   6. Adaptere til quest-pins (Questie, Blizzards egne quest-punkter)
 --   7. Pins på automappet
---   8. Korteste rute gennem quest-målene
+--   8. Former om klyngerne af quest-mål
 --   9. Gennemsigtighed og fading i combat
 --  10. Opdateringsløkken (droslet OnUpdate)
 --  11. Indstillinger: ét sted, hvor en værdi sættes
@@ -47,7 +47,7 @@ local DEFAULTS = {
     pinScale       = 1.0,      -- størrelsesfaktor for pins
     pinBoost       = 2.0,      -- pins er så mange gange mere synlige end terrænet
     edgePins       = true,     -- vis nærmeste pin for hver quest på kanten, når den er uden for
-    route          = true,     -- tegn den korteste rute gennem quest-målene i rammen
+    route          = true,     -- tegn en blød form om hver klynge af quest-mål
     rotate         = false,    -- drej kortet, så det, figuren ser mod, er opad (ellers nord opad)
     source         = "auto",   -- auto | questie | blizzard (hvilken adapter)
     strata         = "LOW",    -- frame strata: under de fleste UI-elementer
@@ -232,7 +232,7 @@ end
 
 -- Kortets drejning i den igangværende opdatering. 0 = nord opad. Med «rotate»
 -- slået til er det spillerens retning, så det, figuren ser mod, peger opad.
--- Sættes én gang pr. opdatering (Tick), så fliser, pins og rute er enige.
+-- Sættes én gang pr. opdatering (Tick), så fliser, pins og former er enige.
 local viewAngle, viewSin, viewCos = 0, 0, 1
 
 local function SetViewAngle(angle)
@@ -829,141 +829,222 @@ local function UpdatePins(continent, north, west)
 end
 
 --------------------------------------------------------------------------------
--- 8. Korteste rute gennem quest-målene
+-- 8. Former om klyngerne af quest-mål
 --
--- En streg fra spilleren gennem alle mål (mobs, ting, steder) i rammen, i den
--- rækkefølge der giver kortest vej. Det er «den handelsrejsendes problem»:
---   1. nærmeste nabo: gå hele tiden til det nærmeste mål, der mangler
---   2. 2-opt: vend et stykke af ruten, hvis det fjerner en krydsning
---   3. or-opt: flyt ét mål til et andet sted i rækken, hvis det forkorter
---   4. med højst 8 mål: prøv alle rækkefølger, der kan slå den fundne
--- Op til 8 mål er ruten altså den korteste, der findes. Med flere er den et
--- godt bud (typisk få procent fra den korteste), fundet på under et millisekund.
--- (En ret linje fra lineær regression ville gå gennem punktsværmen, ikke forbi
--- hvert mål – den kan man ikke følge.)
+-- I stedet for en streg, der rammer hver mob, tegnes en blød, lukket form om
+-- hver klynge af mål: «her er området – løb rundt i det». Enlige mål får ingen
+-- form; de har deres pin. Fire trin:
+--   1. Klynger: mål, der ligger tættere end en «lænkeafstand», hører sammen
+--      (og dermed også deres naboers naboer). Afstanden er det dobbelte af
+--      den typiske afstand til nærmeste nabo (mindst 60, højst 150 yards), så
+--      det passer både til tætte og spredte pins.
+--   2. Omrids: den konvekse skal om klyngen (som en elastik om søm).
+--   3. Indhak: en lang kant graves ind til det nærmeste mål bag den, så formen
+--      følger klyngen i stedet for at spænde over tomme områder.
+--   4. Blødgøring: hjørnerne skæres af et par gange (Chaikin), så omridset
+--      bliver en jævn kurve. Hvert hjørne flyttes først så meget, at kurven
+--      ender en halv snes yards uden om målet – ikke igennem det.
 --
--- Et mål, man har stået ved, tages ud af ruten i nogle minutter. Ellers ville
--- stregen pege tilbage på det, så snart man gik videre.
+-- Formerne ligger fast i verden og afhænger ikke af, hvor spilleren står. De
+-- regnes derfor kun om, når målene ændrer sig, eller spilleren har flyttet sig
+-- et godt stykke – ikke hvert sekund.
 --------------------------------------------------------------------------------
 
-local ROUTE_MAX_NODES = 40         -- kun de nærmeste mål regnes med
-local ROUTE_EXACT_NODES = 8        -- så mange mål kan alle rækkefølger prøves for (8! = 40.320)
-local ROUTE_MERGE_YARDS = 8        -- mål tættere end det er ét stop
-local ROUTE_VISIT_YARDS = 15       -- så tæt på = besøgt
-local ROUTE_VISIT_SECONDS = 180    -- så længe holdes et besøgt mål ude (ca. en respawn)
+local LOOP_MAX_POINTS = 250        -- kun de nærmeste mål regnes med
+local LOOP_MERGE_YARDS = 8         -- mål tættere end det er samme sted
+local LOOP_MIN_CLUSTER = 3         -- så mange mål skal der til en form
+local LOOP_LINK_FACTOR = 2         -- lænkeafstand = så mange gange den typiske afstand til nærmeste nabo
+local LOOP_LINK_MIN = 60           -- … men inden for disse grænser (yards)
+local LOOP_LINK_MAX = 150
+local LOOP_DIG_RATIO = 2           -- grav ind, når kanten er så mange gange længere end dybden
+local LOOP_MARGIN_YARDS = 12       -- så langt uden om de yderste mål går den færdige form
+local LOOP_MAX_PUSH = 70           -- et hjørne flyttes højst så langt for at opnå det
+local LOOP_MAX_LINES = 400         -- loft over linjestykker tegnet på én gang
 
-local routeNorth, routeWest = {}, {}   -- rutens stop i rækkefølge (verdenskoordinater)
-local routeCount = 0
-local routeYards = 0                   -- rutens længde, til /d2map status
-local routeLines = {}                  -- genbrugte linjer
-local visited = {}                     -- stop-nøgle → tidspunkt for besøget
+local loopNorth, loopWest = {}, {} -- alle formers punkter efter hinanden (verdenskoordinater)
+local loopStart = {}               -- loopStart[k] = første punkt i form k; [loopCount + 1] = slut + 1
+local loopCount = 0
+local loopLink = 0                 -- den lænkeafstand, der blev brugt (til /d2map status)
+local loopLines = {}               -- genbrugte linjer
+local loopLinesShown = 0
 
--- Arbejdstabeller, genbrugt mellem beregninger.
-local candNorth, candWest, candDist, candOrder = {}, {}, {}, {}
-local nodeNorth, nodeWest, tour, used = {}, {}, {}, {}
+-- Hvad formerne sidst blev regnet ud fra.
+local builtSignature, builtContinent, builtNorth, builtWest, builtSpan
 
-local function ByDistance(a, b)
-    return candDist[a] < candDist[b]
+-- Målene, der regnes på: x mod øst, y mod nord (yards).
+local pointX, pointY, pointDist, pointOrder = {}, {}, {}, {}
+
+local function ByPointDistance(a, b)
+    return pointDist[a] < pointDist[b]
 end
 
-local function NodeDistance(a, b)
-    local dn, dw = nodeNorth[a] - nodeNorth[b], nodeWest[a] - nodeWest[b]
-    return sqrt(dn * dn + dw * dw)
+local function ByPosition(a, b)
+    if pointX[a] ~= pointX[b] then return pointX[a] < pointX[b] end
+    return pointY[a] < pointY[b]
 end
 
--- Et stop genkendes på sin plads, afrundet til hele yards.
-local function VisitKey(north, west)
-    return floor(north + 0.5) * 100000 + floor(west + 0.5)
+local function PointDistance(a, b)
+    local dx, dy = pointX[a] - pointX[b], pointY[a] - pointY[b]
+    return sqrt(dx * dx + dy * dy)
 end
 
--- 2-opt: vend stykket tour[i..j], hvis ruten bliver kortere. Punkt 1 er
--- spilleren og ligger fast; ruten er åben (man skal ikke tilbage til start).
-local function TwoOpt(m)
-    local improved = false
-    for i = 2, m - 1 do
-        for j = i + 1, m do
-            local before, first, last, after = tour[i - 1], tour[i], tour[j], tour[j + 1]
-            local delta = NodeDistance(before, last) - NodeDistance(before, first)
-            if after then
-                delta = delta + NodeDistance(first, after) - NodeDistance(last, after)
+-- Afstanden fra punkt p til linjestykket a-b.
+local function SegmentDistance(p, a, b)
+    local ax, ay = pointX[a], pointY[a]
+    local dx, dy = pointX[b] - ax, pointY[b] - ay
+    local px, py = pointX[p] - ax, pointY[p] - ay
+    local length = dx * dx + dy * dy
+    local t = length > 0 and Clamp((px * dx + py * dy) / length, 0, 1) or 0
+    local ex, ey = px - t * dx, py - t * dy
+    return sqrt(ex * ex + ey * ey)
+end
+
+-- Positiv, når o → a → b drejer mod uret.
+local function Cross(o, a, b)
+    return (pointX[a] - pointX[o]) * (pointY[b] - pointY[o]) - (pointY[a] - pointY[o]) * (pointX[b] - pointX[o])
+end
+
+-- Den konvekse skal om en klynge (Andrews «monotone chain»), mod uret.
+local function ConvexHull(members)
+    table.sort(members, ByPosition)
+    local hull = {}
+    for pass = 1, 2 do
+        local base = #hull
+        local from, to, step = 1, #members, 1
+        if pass == 2 then from, to, step = #members, 1, -1 end
+        for i = from, to, step do
+            local p = members[i]
+            while #hull >= base + 2 and Cross(hull[#hull - 1], hull[#hull], p) <= 0 do
+                hull[#hull] = nil
             end
-            if delta < -0.01 then
-                local low, high = i, j
-                while low < high do
-                    tour[low], tour[high] = tour[high], tour[low]
-                    low, high = low + 1, high - 1
+            hull[#hull + 1] = p
+        end
+        hull[#hull] = nil                                  -- sidste punkt er næste halvdels første
+    end
+    return hull
+end
+
+-- Graver lange kanter ind til klyngens rand: en kant, der er længere end
+-- lænkeafstanden, får det nærmeste mål sat ind, hvis det ligger tæt på kanten
+-- i forhold til dens længde – og ikke tættere på en af nabokanterne.
+-- Et mål må stå i omridset to gange. Det er det, der lader en smal række af
+-- mål (langs en vej eller en kyst) blive til et bånd: omridset går ud langs
+-- rækken og tilbage igen, og blødgøringen skubber de to sider fra hinanden.
+local function DigHull(hull, members, link)
+    local uses = {}
+    for _, p in ipairs(hull) do uses[p] = 1 end
+    local i, guard = 1, 0
+    while i <= #hull and guard < 600 do
+        guard = guard + 1
+        local count = #hull
+        local a, b = hull[i], hull[i % count + 1]
+        local length = PointDistance(a, b)
+        local dug = false
+        if length > link then
+            -- Det nærmeste mål, som hører til denne kant (ikke en nabokant).
+            local before, after = hull[(i - 2) % count + 1], hull[(i + 1) % count + 1]
+            local best, bestDist
+            for _, p in ipairs(members) do
+                if (uses[p] or 0) < 2 and p ~= a and p ~= b and p ~= before and p ~= after then
+                    local d = SegmentDistance(p, a, b)
+                    if (not bestDist or d < bestDist)
+                        and d <= SegmentDistance(p, before, a) and d <= SegmentDistance(p, b, after) then
+                        best, bestDist = p, d
+                    end
                 end
-                improved = true
+            end
+            if best and length / max(bestDist, 1) > LOOP_DIG_RATIO then
+                table.insert(hull, i + 1, best)
+                uses[best] = (uses[best] or 0) + 1
+                dug = true                                 -- prøv den samme kant igen: den er kortere nu
             end
         end
+        if not dug then i = i + 1 end
     end
-    return improved
 end
 
--- Or-opt: tag ét stop ud og sæt det ind et andet sted, hvis det forkorter.
-local function OrOpt(m)
-    local improved = false
-    for i = 2, m do
-        local node, before, after = tour[i], tour[i - 1], tour[i + 1]
-        -- det, der spares ved at tage stoppet ud
-        local saved = NodeDistance(before, node)
-        if after then saved = saved + NodeDistance(node, after) - NodeDistance(before, after) end
-        local bestGain, bestAt = 0.01, nil
-        for j = 1, m do
-            if j ~= i and j ~= i - 1 then                  -- mellem tour[j] og tour[j + 1]
-                local left, right = tour[j], tour[j + 1]
-                local added = NodeDistance(left, node)
-                if right then added = added + NodeDistance(node, right) - NodeDistance(left, right) end
-                if saved - added > bestGain then bestGain, bestAt = saved - added, j end
-            end
-        end
-        if bestAt then
-            table.remove(tour, i)
-            if bestAt > i then bestAt = bestAt - 1 end     -- alt efter i er rykket én ned
-            table.insert(tour, bestAt + 1, node)
-            improved = true
+-- Gør omridset til en blød form. Returnerer to lister (x og y) med formens punkter.
+--
+-- Chaikins hjørneskæring ender i en kurve, der ved hjørnet V med naboerne A og
+-- B går gennem (A + 6V + B) / 8 – altså et stykke inden for V, og mere jo
+-- spidsere hjørnet og jo længere kanterne er. Skal kurven i stedet gå gennem
+-- V + margen · n (n = retningen udad), må hjørnet flyttes til
+--     V' = V + 4/3 · margen · n + (2V - A - B) / 6
+-- (naboernes egen flytning er ikke regnet med; det er tæt nok).
+local function SmoothOutline(hull)
+    local xs, ys = {}, {}
+    local count = #hull
+    if count < 3 then
+        -- Alle mål på én linje: en smal kasse om linjen.
+        local a, b = hull[1], hull[count]
+        local dx, dy = pointX[b] - pointX[a], pointY[b] - pointY[a]
+        local length = max(sqrt(dx * dx + dy * dy), 1)
+        local ux, uy = dx / length * LOOP_MARGIN_YARDS, dy / length * LOOP_MARGIN_YARDS
+        xs = { pointX[a] - ux + uy, pointX[b] + ux + uy, pointX[b] + ux - uy, pointX[a] - ux - uy }
+        ys = { pointY[a] - uy - ux, pointY[b] + uy - ux, pointY[b] + uy + ux, pointY[a] - uy + ux }
+    else
+        -- Skallen står mod uret, og indhakkene ændrer ikke på det. Så peger
+        -- (dy, -dx) udad for hver kant – også på tilbagevejen i et bånd, hvor
+        -- kanten løber modsat og normalen derfor vender til den anden side.
+        local sign = 1
+        for i = 1, count do
+            local before, here, after = hull[(i - 2) % count + 1], hull[i], hull[i % count + 1]
+            -- Udadrettede normaler på de to kanter, der mødes i hjørnet.
+            local ax, ay = pointY[here] - pointY[before], pointX[before] - pointX[here]
+            local bx, by = pointY[after] - pointY[here], pointX[here] - pointX[after]
+            local al, bl = max(sqrt(ax * ax + ay * ay), 0.001), max(sqrt(bx * bx + by * by), 0.001)
+            local nx, ny = ax / al + bx / bl, ay / al + by / bl
+            local nl = sqrt(nx * nx + ny * ny)
+            if nl < 0.001 then nx, ny, nl = ax / al, ay / al, 1 end
+            local push = 4 / 3 * LOOP_MARGIN_YARDS * sign / nl
+            local mx = push * nx + (2 * pointX[here] - pointX[before] - pointX[after]) / 6
+            local my = push * ny + (2 * pointY[here] - pointY[before] - pointY[after]) / 6
+            local moved = sqrt(mx * mx + my * my)
+            if moved > LOOP_MAX_PUSH then mx, my = mx / moved * LOOP_MAX_PUSH, my / moved * LOOP_MAX_PUSH end
+            xs[i], ys[i] = pointX[here] + mx, pointY[here] + my
         end
     end
-    return improved
+
+    -- Chaikin: hver kant bliver til to punkter, ¼ og ¾ henne. Tre runder giver
+    -- en jævn kurve; store omrids nøjes med to.
+    for _ = 1, (#xs > 10 and 2 or 3) do
+        local nx, ny, n = {}, {}, #xs
+        for i = 1, n do
+            local j = i % n + 1
+            nx[#nx + 1], ny[#ny + 1] = 0.75 * xs[i] + 0.25 * xs[j], 0.75 * ys[i] + 0.25 * ys[j]
+            nx[#nx + 1], ny[#ny + 1] = 0.25 * xs[i] + 0.75 * xs[j], 0.25 * ys[i] + 0.75 * ys[j]
+        end
+        xs, ys = nx, ny
+    end
+    return xs, ys
 end
 
--- Udtømmende søgning med afskæring: en delrute forfølges ikke, hvis den ikke
--- kan slå den bedste kendte. «Kan ikke» afgøres med en nedre grænse: hvert mål,
--- der mangler, koster mindst afstanden til sin nærmeste nabo (exactMin), og
--- rest er summen af dem. Søgningen starter fra den rute, trin 1-3 fandt, så det
--- meste skæres væk med det samme.
-local exactBest, exactFound = 0, false
-local exactPath, exactBestPath, exactUsed, exactMin = {}, {}, {}, {}
-
-local function ExactSearch(depth, m, last, length, rest)
-    if length + rest >= exactBest then return end
-    if depth > m then
-        exactBest, exactFound = length, true
-        for k = 2, m do exactBestPath[k] = exactPath[k] end
+-- Regner formerne ud, hvis der er grund til det. Kaldes, når pins er hentet
+-- (ca. én gang i sekundet), men gør for det meste ingenting.
+local function BuildLoops(continent, north, west)
+    if not db.route or recordCount == 0 then
+        loopCount, builtSignature = 0, nil
         return
     end
-    for k = 2, m do
-        if not exactUsed[k] then
-            exactUsed[k], exactPath[depth] = true, k
-            ExactSearch(depth + 1, m, k, length + NodeDistance(last, k), rest - exactMin[k])
-            exactUsed[k] = false
+
+    -- Et fingeraftryk af alle mål på kontinentet (hele tal, så rækkefølgen er ligegyldig).
+    local signature = continent
+    for i = 1, recordCount do
+        local rec = records[i]
+        if rec.continent == continent and rec.kind == "objective" then
+            signature = signature + 1000003 + floor(rec.north * 4 + 0.5) * 3 + floor(rec.west * 4 + 0.5)
         end
     end
-end
-
--- Regner ruten ud fra spillerens plads. Kaldes, når pins er hentet (ca. 1/sek.).
-local function BuildRoute(continent, north, west)
-    routeCount, routeYards = 0, 0
-    if not db.route or recordCount == 0 then return end
-
-    local now = GetTime and GetTime() or 0
-    for key, when in pairs(visited) do
-        if now - when > ROUTE_VISIT_SECONDS then visited[key] = nil end
+    if signature == builtSignature and continent == builtContinent and db.span == builtSpan
+        and max(abs(north - builtNorth), abs(west - builtWest)) < db.span / 4 then
+        return                                             -- intet nyt, og spilleren er ikke gået langt
     end
+    builtSignature, builtContinent, builtNorth, builtWest, builtSpan = signature, continent, north, west, db.span
+    loopCount = 0
 
-    -- Mål inden for rammen. En firkantet ramme når længere ud i hjørnerne.
-    local radius = db.span / 2 * (PIN_REACH[db.shape] or 0.9)
-    if db.shape ~= "round" then radius = radius * 1.4143 end
+    -- Mål inden for to rammebredder; så er alt i rammen med, også efter man har
+    -- flyttet sig en kvart ramme.
+    local radius = db.span
     local found = 0
     for i = 1, recordCount do
         local rec = records[i]
@@ -971,131 +1052,153 @@ local function BuildRoute(continent, north, west)
             local dn, dw = rec.north - north, rec.west - west
             local dist = dn * dn + dw * dw
             if dist <= radius * radius then
-                local key = VisitKey(rec.north, rec.west)
-                if dist <= ROUTE_VISIT_YARDS * ROUTE_VISIT_YARDS then visited[key] = now end
-                if not visited[key] then
-                    local merged = false
-                    for j = 1, found do
-                        local a, b = candNorth[j] - rec.north, candWest[j] - rec.west
-                        if a * a + b * b <= ROUTE_MERGE_YARDS * ROUTE_MERGE_YARDS then
-                            merged = true
-                            break
-                        end
-                    end
-                    if not merged then
-                        found = found + 1
-                        candNorth[found], candWest[found], candDist[found] = rec.north, rec.west, dist
-                    end
-                end
+                found = found + 1
+                pointX[found], pointY[found], pointDist[found] = -rec.west, rec.north, dist
             end
         end
     end
-    if found == 0 then return end
 
-    -- De nærmeste først; resten skæres fra.
-    for i = 1, found do candOrder[i] = i end
-    for i = found + 1, #candOrder do candOrder[i] = nil end
-    table.sort(candOrder, ByDistance)
-
-    -- Punkt 1 er spilleren, 2..m er målene.
-    local m = min(found, ROUTE_MAX_NODES) + 1
-    nodeNorth[1], nodeWest[1] = north, west
-    for k = 2, m do
-        local c = candOrder[k - 1]
-        nodeNorth[k], nodeWest[k] = candNorth[c], candWest[c]
-    end
-
-    -- 1. Nærmeste nabo.
-    for k = 1, m do used[k] = false end
-    for k = m + 1, #tour do tour[k] = nil end
-    tour[1], used[1] = 1, true
-    for step = 2, m do
-        local last, best, bestDist = tour[step - 1], nil, nil
-        for k = 2, m do
-            if not used[k] then
-                local d = NodeDistance(last, k)
-                if not bestDist or d < bestDist then best, bestDist = k, d end
+    -- De nærmeste først; mål samme sted (to quests på samme mob) tæller én gang.
+    for i = 1, found do pointOrder[i] = i end
+    for i = found + 1, #pointOrder do pointOrder[i] = nil end
+    table.sort(pointOrder, ByPointDistance)
+    local points = {}
+    for _, p in ipairs(pointOrder) do
+        local merged = false
+        for _, q in ipairs(points) do
+            local dx, dy = pointX[p] - pointX[q], pointY[p] - pointY[q]
+            if dx * dx + dy * dy <= LOOP_MERGE_YARDS * LOOP_MERGE_YARDS then
+                merged = true
+                break
             end
         end
-        tour[step], used[best] = best, true
+        if not merged then
+            points[#points + 1] = p
+            if #points >= LOOP_MAX_POINTS then break end
+        end
     end
+    if #points < LOOP_MIN_CLUSTER then return end
 
-    -- 2. og 3. Forbedr, til intet hjælper (eller 20 runder, så det altid slutter).
-    for _ = 1, 20 do
-        local a = TwoOpt(m)
-        local b = OrOpt(m)
-        if not (a or b) then break end
-    end
-
-    -- 4. Få mål: find den korteste af alle rækkefølger.
-    if m - 1 <= ROUTE_EXACT_NODES then
-        local length, rest = 0, 0
-        for k = 2, m do
-            length = length + NodeDistance(tour[k - 1], tour[k])
-            exactUsed[k] = false
-            local nearest
-            for j = 1, m do
-                if j ~= k then
-                    local d = NodeDistance(k, j)
-                    if not nearest or d < nearest then nearest = d end
-                end
+    -- 1. Lænkeafstand: det dobbelte af den typiske (median) afstand til nærmeste nabo.
+    local nearest = {}
+    for i, p in ipairs(points) do
+        local best
+        for j, q in ipairs(points) do
+            if i ~= j then
+                local d = PointDistance(p, q)
+                if not best or d < best then best = d end
             end
-            exactMin[k] = nearest
-            rest = rest + nearest
         end
-        exactBest, exactFound = length - 0.01, false       -- kun en rute, der er rigtigt kortere
-        ExactSearch(2, m, 1, 0, rest)
-        if exactFound then
-            for k = 2, m do tour[k] = exactBestPath[k] end
+        nearest[i] = best
+    end
+    table.sort(nearest)
+    local link = Clamp(LOOP_LINK_FACTOR * nearest[floor((#nearest + 1) / 2)], LOOP_LINK_MIN, LOOP_LINK_MAX)
+    link = floor(link / 10 + 0.5) * 10                     -- hele tiere, så klyngerne ikke flakker
+    loopLink = link
+
+    -- Klynger: to mål inden for lænkeafstanden får samme «rod».
+    local parent = {}
+    for i = 1, #points do parent[i] = i end
+    local function Root(i)
+        while parent[i] ~= i do
+            parent[i] = parent[parent[i]]
+            i = parent[i]
         end
+        return i
+    end
+    for i = 1, #points do
+        for j = i + 1, #points do
+            if PointDistance(points[i], points[j]) <= link then
+                parent[Root(i)] = Root(j)
+            end
+        end
+    end
+    local clusters, order = {}, {}
+    for i = 1, #points do
+        local root = Root(i)
+        if not clusters[root] then
+            clusters[root] = {}
+            order[#order + 1] = root
+        end
+        table.insert(clusters[root], points[i])
     end
 
-    routeCount = m - 1
-    for k = 2, m do
-        routeNorth[k - 1], routeWest[k - 1] = nodeNorth[tour[k]], nodeWest[tour[k]]
-        routeYards = routeYards + NodeDistance(tour[k - 1], tour[k])
+    -- 2.-4. En form pr. klynge.
+    local total = 0
+    for _, root in ipairs(order) do
+        local members = clusters[root]
+        if #members >= LOOP_MIN_CLUSTER then
+            local hull = ConvexHull(members)
+            if #hull >= 3 then DigHull(hull, members, link) end
+            local xs, ys = SmoothOutline(hull)
+            loopCount = loopCount + 1
+            loopStart[loopCount] = total + 1
+            for i = 1, #xs do
+                total = total + 1
+                loopNorth[total], loopWest[total] = ys[i], -xs[i]
+            end
+        end
     end
+    loopStart[loopCount + 1] = total + 1
 end
 
 local function AcquireLine(index)
-    local line = routeLines[index]
+    local line = loopLines[index]
     if line then return line end
     line = pinLayer:CreateLine(nil, "BORDER")              -- under pins (ARTWORK)
-    if index == 1 then
-        -- Første stykke – «gå herhen nu» – er tykkere og lysere.
-        line:SetThickness(3)
-        line:SetColorTexture(1.00, 0.93, 0.55, 0.95)
-    else
-        line:SetThickness(2)
-        line:SetColorTexture(0.86, 0.68, 0.25, 0.70)
-    end
-    routeLines[index] = line
+    line:SetThickness(2)
+    line:SetColorTexture(0.95, 0.80, 0.35, 0.85)
+    loopLines[index] = line
     return line
 end
 
--- Flytter rutens linjer i forhold til spilleren. Kaldes ved hver opdatering.
-local function UpdateRoute(north, west)
-    local count = (db.route and pinLayer.CreateLine) and routeCount or 0
+-- Flytter formernes linjer i forhold til spilleren. Kaldes ved hver opdatering.
+-- Et stykke tegnes kun, når begge ender ligger inden for rammen.
+local function UpdateLoops(north, west)
+    local count = (db.route and pinLayer.CreateLine) and loopCount or 0
     local pxPerYard = db.size / db.span
-    local fromX, fromY = 0, 0                              -- spilleren står i midten
-    for i = 1, count do
-        local x, y = ToScreen((west - routeWest[i]) * pxPerYard, (routeNorth[i] - north) * pxPerYard)
-        local line = AcquireLine(i)
-        line:SetStartPoint("CENTER", pinLayer, fromX, fromY)
-        line:SetEndPoint("CENTER", pinLayer, x, y)
-        if not line.shown then
-            line:Show()
-            line.shown = true
+    local reach = db.size / 2 * (PIN_REACH[db.shape] or 0.9)
+    local roundShape = db.shape == "round"
+    local used = 0
+    for k = 1, count do
+        local first, last = loopStart[k], loopStart[k + 1] - 1
+        -- Formen er lukket: begynd ved det sidste punkt.
+        local fromX, fromY = ToScreen((west - loopWest[last]) * pxPerYard, (loopNorth[last] - north) * pxPerYard)
+        local fromInside
+        if roundShape then
+            fromInside = fromX * fromX + fromY * fromY <= reach * reach
+        else
+            fromInside = abs(fromX) <= reach and abs(fromY) <= reach
         end
-        fromX, fromY = x, y
+        for i = first, last do
+            local x, y = ToScreen((west - loopWest[i]) * pxPerYard, (loopNorth[i] - north) * pxPerYard)
+            local inside
+            if roundShape then
+                inside = x * x + y * y <= reach * reach
+            else
+                inside = abs(x) <= reach and abs(y) <= reach
+            end
+            if inside and fromInside and used < LOOP_MAX_LINES then
+                used = used + 1
+                local line = AcquireLine(used)
+                line:SetStartPoint("CENTER", pinLayer, fromX, fromY)
+                line:SetEndPoint("CENTER", pinLayer, x, y)
+                if not line.shown then
+                    line:Show()
+                    line.shown = true
+                end
+            end
+            fromX, fromY, fromInside = x, y, inside
+        end
     end
-    for i = count + 1, #routeLines do
-        local line = routeLines[i]
+    for i = used + 1, #loopLines do
+        local line = loopLines[i]
         if line.shown then
             line:Hide()
             line.shown = false
         end
     end
+    loopLinesShown = used
 end
 
 --------------------------------------------------------------------------------
@@ -1186,10 +1289,10 @@ local function Tick(elapsed)
     if forceSync or sinceSync >= db.pinSyncInterval then
         sinceSync = 0
         SyncPins()
-        BuildRoute(continent, north, west)
+        BuildLoops(continent, north, west)
     end
     UpdatePins(continent, north, west)
-    UpdateRoute(north, west)
+    UpdateLoops(north, west)
 
     -- Pilen viser figurens retning på kortet: lige op, når kortet drejer med.
     if arrow.SetRotation then arrow:SetRotation((facing or 0) - viewAngle) end
@@ -1456,7 +1559,7 @@ local function CreateOptions()
         return ("Pin size: %.1fx"):format(v)
     end)
     byKey.edgePins = MakeCheck(frame, Row(26), "Show nearest off-map objective on the rim", "edgePins")
-    byKey.route = MakeCheck(frame, Row(30), "Draw shortest route through objectives", "route")
+    byKey.route = MakeCheck(frame, Row(30), "Outline each cluster of objectives", "route")
 
     byKey.terrain = MakeCheck(frame, Row(26), "Show terrain (minimap tiles)", "terrain")
     byKey.style = MakeChoice(frame, Row(26), "Look", "style", {
@@ -1604,7 +1707,7 @@ local function PrintHelp()
         "/d2map pins <all|objectives|off> – which quest pins (now " .. db.pins .. ")",
         "/d2map pinsize <0.5-3> – pin scale (now " .. db.pinScale .. ")",
         "/d2map edge <on|off> – nearest off-map objective on the rim (now " .. OnOff(db.edgePins) .. ")",
-        "/d2map route <on|off> – shortest route through the objectives (now " .. OnOff(db.route) .. ")",
+        "/d2map outlines <on|off> – a soft outline around each cluster of objectives (now " .. OnOff(db.route) .. ")",
         "/d2map rotate <on|off> – turn the map to the way you face (now " .. OnOff(db.rotate) .. ")",
         "/d2map terrain <on|off> – minimap tiles (now " .. OnOff(db.terrain) .. ")",
         "/d2map source <auto|questie|blizzard> – where pins come from (now " .. db.source .. ")",
@@ -1633,8 +1736,8 @@ local function PrintStatus()
     end
     Print(("pins: %s, source %s, %d known, %d drawn%s"):format(
         db.pins, activeAdapterName, recordCount, pinsShown, mask and "" or "; no mask support, using hard edges"))
-    Print(("route: %s, %d stops, %.0f yards; map %s"):format(
-        OnOff(db.route), routeCount, routeYards, db.rotate and "rotates with you" or "north up"))
+    Print(("outlines: %s, %d clusters (objectives within %d yards belong together), %d line pieces drawn; map %s"):format(
+        OnOff(db.route), loopCount, loopLink, loopLinesShown, db.rotate and "rotates with you" or "north up"))
     if tickFailed then Print("the update loop is stopped after an error – /d2map toggle twice to retry.") end
 end
 
@@ -1721,7 +1824,8 @@ commands.pins = function(rest) SetChoice("pins", rest, PIN_MODES, "pins") end
 commands.pinsize = function(rest) SetNumber("pinScale", rest, "pinsize") end
 commands.edge = function(rest) SetFlag("edgePins", rest, "edge pins") end
 commands.terrain = function(rest) SetFlag("terrain", rest, "terrain") end
-commands.route = function(rest) SetFlag("route", rest, "route") end
+commands.route = function(rest) SetFlag("route", rest, "outlines") end
+commands.outlines = commands.route
 commands.rotate = function(rest) SetFlag("rotate", rest, "rotate") end
 commands.source = function(rest) SetChoice("source", rest, SOURCES, "source") end
 

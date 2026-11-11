@@ -252,11 +252,43 @@ local function linjer()
     for _, b in ipairs(pinLayer.born) do if b.slags == "Line" and b.shown then t[#t + 1] = b end end
     return t
 end
--- Rutens stop som tekst, fx "-67,-45 56,112" (skærmkoordinater, afrundet).
-local function rute()
-    local dele = {}
-    for _, l in ipairs(linjer()) do dele[#dele + 1] = ("%d,%d"):format(math.floor(l.til.x + 0.5), math.floor(l.til.y + 0.5)) end
-    return table.concat(dele, " ")
+-- Linjestykkerne samlet til former: en ny form begynder, når et stykke ikke
+-- starter, hvor det forrige sluttede. Hver form er en liste af punkter.
+local function former()
+    local alle, form, sidste = {}, nil, nil
+    for _, l in ipairs(linjer()) do
+        if not sidste or l.fra.x ~= sidste.x or l.fra.y ~= sidste.y then
+            form = { lukket = false, start = l.fra }
+            alle[#alle + 1] = form
+        end
+        form[#form + 1] = l.til
+        sidste = l.til
+        form.lukket = l.til.x == form.start.x and l.til.y == form.start.y
+    end
+    return alle
+end
+-- Ligger punktet (x, y) inden i formen? (stråle mod højre, lige/ulige krydsninger)
+local function indeni(form, x, y)
+    local inde, j = false, #form
+    for i = 1, #form do
+        local a, b = form[i], form[j]
+        if (a.y > y) ~= (b.y > y) and x < (b.x - a.x) * (y - a.y) / (b.y - a.y) + a.x then inde = not inde end
+        j = i
+    end
+    return inde
+end
+-- Korteste afstand fra (x, y) til formens kant.
+local function afstand(form, x, y)
+    local mindst, j = math.huge, #form
+    for i = 1, #form do
+        local a, b = form[i], form[j]
+        local dx, dy = b.x - a.x, b.y - a.y
+        local l = dx * dx + dy * dy
+        local u = l > 0 and math.max(0, math.min(1, ((x - a.x) * dx + (y - a.y) * dy) / l)) or 0
+        mindst = math.min(mindst, math.sqrt((x - a.x - u * dx) ^ 2 + (y - a.y - u * dy) ^ 2))
+        j = i
+    end
+    return mindst
 end
 local function pinVed(x, y)
     for _, p in ipairs(pins()) do
@@ -264,6 +296,7 @@ local function pinVed(x, y)
     end
 end
 
+-- (test/tegn.lua genbruger alt herover; behold linjen herunder som mærke)
 print("Terræn")
 kor(0.3)
 tjek("uden terræn tegnes ingen fliser, men pilen er der", #fliser() == 0 and pinLayer.synlig == true)
@@ -309,18 +342,13 @@ tjek("kant-pinnen er mindre og svagere", kant and taet(kant.bredde, 16 * 0.75) a
 -- 4 inden for rammen (to mobs, aflevering, ny quest) + 1 på kanten for quest 2
 tjek("kun den nærmeste pin pr. quest på kanten (5 pins i alt)", #pins() == 5, #pins())
 
-print("Rute gennem målene")
--- To mål i rammen (quest 1): det nærmeste først. Aflevering, ny quest, skjulte og fjerne er ikke med.
-tjek("ruten går til det nærmeste mål først og så videre", rute() == "-67,-45 56,112", rute())
-local l = linjer()
-tjek("første stykke begynder ved spilleren", l[1].fra.x == 0 and l[1].fra.y == 0)
-tjek("næste stykke begynder, hvor det forrige slutter", l[2].fra.x == l[1].til.x and l[2].fra.y == l[1].til.y)
+print("Former om klynger")
+tjek("to mål er ikke en klynge: ingen form", #linjer() == 0, #linjer())
 
 print("Flydende opdatering")
 spiller.nord = spiller.nord + 10                      -- gå 10 yards mod nord
 kor(0.12)
 tjek("pins flytter sig med spilleren inden for 0,1 sek.", pinVed(50 * px, 90 * px) ~= nil)
-tjek("ruten flytter sig med", linjer()[2].til.y == 90 * px)
 spiller.nord = spiller.nord - 10
 kor(0.12)
 
@@ -429,9 +457,9 @@ felt.shape.buttons[2]:Klik()
 kor(0.2)
 tjek("valg af Square skifter maske", D2MapDB.shape == "square" and fliser()[1].maske.tekstur:find("mask%-square") ~= nil)
 felt.route:Klik()
-kor(0.2)
-tjek("afkrydsning slår ruten fra", D2MapDB.route == false and #linjer() == 0)
+tjek("afkrydsning slår formerne fra", D2MapDB.route == false)
 felt.route:Klik()
+tjek("…og til igen", D2MapDB.route == true)
 felt.rotate:Klik()
 tjek("afkrydsning slår rotation til", D2MapDB.rotate == true)
 felt.rotate:Klik()
@@ -491,107 +519,100 @@ slash("source proeve")
 kor(1.2)
 tjek("en registreret adapter kan vælges og tegner", pinVed(0, 20 * px) ~= nil)
 
-print("Ruten forbedres, og besøgte mål tages ud")
--- Tre mål på en øst-vest-linje: 50 øst, 150 øst og 55 vest. Nærmeste nabo giver
--- 50 → 150 → -55 (355 yards); den korteste er -55 → 50 → 150 (260 yards).
-local maal = { { 0, 50 }, { 0, 150 }, { 0, -55 } }
+print("Former om klynger af mål")
+-- Mål som { nord, øst } i yards fra der, hvor spilleren står nu.
+local maal = {}
+local udgangsNord, udgangsVest = spiller.nord, spiller.vest
 D2Map.RegisterAdapter("Proeve", {
     name = "Prøve",
     IsAvailable = function() return true end,
     Collect = function(out)
         for i, m in ipairs(maal) do
-            D2Map.EmitPin(out, i, 0, -9000 + m[1], -100 - m[2], "proeve.blp", 1, 1, 1, "objective", 600 + i)
+            D2Map.EmitPin(out, i, 0, udgangsNord + m[1], udgangsVest - m[2], "proeve.blp", 1, 1, 1, "objective", 600 + i)
         end
         return #maal
     end,
 })
-kor(1.2)
-tjek("or-opt finder den korte rækkefølge (vest først)", rute() == "-62,0 56,0 168,0", rute())
-spiller.vest = -100 + 50                                -- gå hen til målet 55 yards mod vest (5 fra)
-kor(1.2)
-tjek("et besøgt mål tages ud af ruten", #linjer() == 2 and rute() == "112,0 224,0", rute())
-spiller.vest = -100                                    -- tilbage: det besøgte mål er stadig ude
-kor(1.2)
-tjek("…så stregen ikke peger tilbage på det", rute() == "56,0 168,0", rute())
-ur = ur + 200                                          -- tre minutter efter er det med igen (respawn)
-kor(1.2)
-tjek("…og er med igen efter tre minutter", #linjer() == 3, rute())
--- Hvor god er ruten? Tilfældige sæt af mål sammenlignes med den korteste af alle
--- rækkefølger: 40 sæt med 7 mål (her skal ruten være den korteste) og 12 sæt med
--- 10 mål (her er den et bud).
-local froe = 12345
-local function tilfaeldig()                            -- fast talrække, så testen er ens hver gang
-    froe = (froe * 1103515245 + 12345) % 2147483648
-    return froe / 2147483648
-end
-local function laengde(punkter, raekke)
-    local sum, x, y = 0, 0, 0
-    for _, i in ipairs(raekke) do
-        sum = sum + math.sqrt((punkter[i].x - x) ^ 2 + (punkter[i].y - y) ^ 2)
-        x, y = punkter[i].x, punkter[i].y
-    end
-    return sum
-end
-local function korteste(punkter)
-    local bedst, brugt = math.huge, {}
-    local function soeg(dybde, x, y, sum)
-        if sum >= bedst then return end
-        if dybde > #punkter then bedst = sum return end
-        for i = 1, #punkter do
-            if not brugt[i] then
-                brugt[i] = true
-                soeg(dybde + 1, punkter[i].x, punkter[i].y, sum + math.sqrt((punkter[i].x - x) ^ 2 + (punkter[i].y - y) ^ 2))
-                brugt[i] = false
-            end
-        end
-    end
-    soeg(1, 0, 0, 0)
-    return bedst
-end
-local function maalRuter(saet, antalMaal)
-  local optimale, vaerste = 0, 1
-  for _ = 1, saet do
+local lejr1 = { { 60, 40 }, { 100, 60 }, { 120, 20 }, { 80, -10 }, { 50, 10 }, { 90, 30 } }
+local lejr2 = { { -120, -100 }, { -150, -70 }, { -170, -120 }, { -130, -140 } }
+local enlig = { 150, -150 }
+local function saet(...)
     maal = {}
-    while #maal < antalMaal do
-        local vinkel, afstand = tilfaeldig() * 2 * math.pi, 30 + tilfaeldig() * 180
-        local n, o = math.sin(vinkel) * afstand, math.cos(vinkel) * afstand
-        local fri = true
-        for _, m in ipairs(maal) do if (m[1] - n) ^ 2 + (m[2] - o) ^ 2 < 20 ^ 2 then fri = false end end
-        if fri then maal[#maal + 1] = { n, o } end
+    for _, liste in ipairs({ ... }) do
+        for _, m in ipairs(liste) do maal[#maal + 1] = m end
     end
-    ur = ur + 200                                      -- glem besøgte mål fra forrige sæt
     kor(1.2)
-    local punkter, raekke = {}, {}
-    for i, li in ipairs(linjer()) do punkter[i], raekke[i] = { x = li.til.x, y = li.til.y }, i end
-    local forhold = #punkter == antalMaal and laengde(punkter, raekke) / korteste(punkter) or 99
-    if forhold < 1.0001 then optimale = optimale + 1 end
-    vaerste = math.max(vaerste, forhold)
-  end
-  print(("       %d mål: den korteste mulige i %d af %d sæt; værste var %.1f %% længere"):format(
-      antalMaal, optimale, saet, (vaerste - 1) * 100))
-  return optimale, vaerste
 end
-local optimale, vaerste = maalRuter(40, 7)
-tjek("op til 8 mål: ruten er altid den korteste, der findes", optimale == 40 and vaerste < 1.0001, vaerste)
-optimale, vaerste = maalRuter(12, 10)
-tjek("10 mål: aldrig mere end 15 % længere end den korteste", vaerste <= 1.15, vaerste)
-
-maal = {}
-for i = 1, 60 do maal[i] = { math.sin(i * 1.7) * 200, math.cos(i * 2.3) * 200 } end
-kor(1.2)
-tjek("mange mål: højst 40 stop, og ruten besøger hvert kun én gang", (function()
-    local set, n = {}, 0
-    for _, li in ipairs(linjer()) do
-        local k = li.til.x .. ":" .. li.til.y
-        if set[k] then return false end
-        set[k], n = true, n + 1
+-- Hvilken form ligger målet i (nummer), og hvor langt er der til kanten?
+local function formMed(m)
+    for nr, form in ipairs(former()) do
+        if indeni(form, m[2] * px, m[1] * px) then return nr, afstand(form, m[2] * px, m[1] * px) end
     end
-    return n > 20 and n <= 40
-end)(), #linjer())
-slash("route off")
+end
+local function alleI(liste, nr, mindstAfstand)
+    for _, m in ipairs(liste) do
+        local i, a = formMed(m)
+        if i ~= nr or a < mindstAfstand then return false end
+    end
+    return true
+end
+saet(lejr1, lejr2, { enlig })
+local f = former()
+tjek("to lejre giver to former", #f == 2, #f)
+tjek("formerne er lukkede kurver", f[1] and f[1].lukket and f[2] and f[2].lukket)
+local nr1, nr2 = formMed(lejr1[1]), formMed(lejr2[1])
+tjek("hver lejr har sin egen form", nr1 and nr2 and nr1 ~= nr2)
+tjek("alle lejrens mål ligger inden i formen, et stykke fra kanten", alleI(lejr1, nr1, 5) and alleI(lejr2, nr2, 5))
+tjek("det enlige mål får ingen form", formMed(enlig) == nil)
+tjek("formerne er bløde: mange korte stykker", #f[1] >= 24 and #f[2] >= 24, #f[1])
+
+local foer = linjer()[1].til.y
+spiller.nord = spiller.nord + 10
+kor(0.12)
+tjek("formerne flytter sig med spilleren", taet(linjer()[1].til.y, foer - 10 * px))
+spiller.nord = spiller.nord - 10
+kor(0.12)
+
+local nyt = { -100, -60 }                               -- en mob mere ved den sydvestlige lejr
+tjek("et nyt mål ligger uden for formen …", formMed(nyt) == nil)
+saet(lejr1, lejr2, { enlig, nyt })
+tjek("… til formen er regnet om og tager det med", formMed(nyt) == formMed(lejr2[1]) and formMed(nyt) ~= nil)
+
+local antalFoer = #linjer()
+slash("zoom 320")                                      -- lejr 2 stikker nu ud over kanten
+kor(1.2)
+local yderst = 0
+for _, l in ipairs(linjer()) do
+    yderst = math.max(yderst, math.sqrt(l.fra.x ^ 2 + l.fra.y ^ 2), math.sqrt(l.til.x ^ 2 + l.til.y ^ 2))
+end
+tjek("stykker uden for rammen tegnes ikke", #linjer() > 0 and #linjer() < antalFoer and yderst <= 280 * 0.90 + 0.01, yderst)
+slash("zoom 500")
+
+saet({ { 0, 60 }, { 0, 120 }, { 0, 180 } })            -- tre mål på én linje mod øst
+f = former()
+tjek("mål på én linje får en smal form om linjen", #f == 1 and f[1].lukket
+    and indeni(f[1], 60 * px, 0) and indeni(f[1], 120 * px, 0) and indeni(f[1], 180 * px, 0))
+
+-- En bue af mål: formen skal følge buen, ikke spænde over hullet i midten.
+local bue = {}
+for i = 0, 12 do
+    local v = math.pi * (0.1 + 0.8 * i / 12)
+    bue[#bue + 1] = { math.sin(v) * 170 - 80, math.cos(v) * 170 }
+end
+saet(bue)
+f = former()
+tjek("en bue af mål giver én form med alle mål i", #f == 1 and alleI(bue, 1, 3))
+tjek("…som følger buen i stedet for at dække hullet under den", #f == 1 and not indeni(f[1], 0, 20 * px))
+
+saet({ { 40, 40 }, { 70, 60 } })
+tjek("to mål alene giver ingen form", #linjer() == 0)
+saet(lejr1)
+slash("outlines off")
 kor(0.2)
-tjek("/d2map route off", #linjer() == 0)
+tjek("/d2map outlines off", #linjer() == 0)
 slash("route on")
+kor(1.2)
+tjek("/d2map route on (det gamle navn virker også)", #former() == 1)
 
 print("Rotation efter figurens retning")
 maal = { { 0, -50 }, { 80, 0 } }                       -- ét mål 50 yards mod vest, ét 80 mod nord
@@ -604,7 +625,14 @@ kor(0.2)
 tjek("rotate: det, figuren ser mod (vest), står lige op", pinVed(0, 50 * px) ~= nil)
 tjek("rotate: nord ligger til højre", pinVed(80 * px, 0) ~= nil)
 tjek("rotate: pilen peger lige op", taet(pinLayer.born[1].rotation, 0))
-tjek("rotate: ruten drejer med", rute() == "0,56 90,0", rute())
+maal = { { 100, -20 }, { 130, 10 }, { 150, -30 }, { 110, 30 }, { 0, -50 }, { 80, 0 } }   -- plus en lejr mod nord
+kor(1.2)
+local midtX, midtY, n = 0, 0, 0
+for _, li in ipairs(linjer()) do midtX, midtY, n = midtX + li.til.x, midtY + li.til.y, n + 1 end
+tjek("rotate: formen om lejren mod nord ligger til højre", n > 0 and midtX / n > 80 and math.abs(midtY / n) < 40,
+    n > 0 and (midtX / n .. ", " .. midtY / n))
+maal = { { 0, -50 }, { 80, 0 } }
+kor(1.2)
 slash("terrain on")
 kor(0.2)
 local drejet
