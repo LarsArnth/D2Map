@@ -7,7 +7,7 @@ bevægelse og targeting går lige igennem.
 
 ```sh
 ./installer.sh        # kopierer D2Map/ ind i spillets AddOns-mappe
-lua test/koer.lua     # 119 tjek mod en attrap af WoW's API
+lua test/koer.lua     # 137 tjek mod en attrap af WoW's API
 lua test/tegn.lua     # tegner formerne for nogle prøvesæt til docs/former.svg
 ```
 
@@ -33,6 +33,7 @@ ajour:
 | `/d2map pinsize <0.5-3>` | Størrelse på pins |
 | `/d2map edge <on\|off>` | Nærmeste pin for hver quest vises på kanten, når den ligger uden for |
 | `/d2map outlines <on\|off>` | En blød form om hver klynge af quest-mål (til som standard; `route` er det gamle navn og virker også) |
+| `/d2map waypoint <on\|off>` | Guidens vej: Factoruides grønne prikkede streg til næste sted (til som standard) |
 | `/d2map rotate <on\|off>` | Drej kortet, så det, figuren ser mod, er opad (fra som standard: nord opad) |
 | `/d2map terrain <on\|off>` | Minimap-fliserne (**fra som standard**: kun pins og pilen) |
 | `/d2map source <auto\|questie\|blizzard>` | Hvor pins kommer fra |
@@ -53,7 +54,7 @@ Indstillingerne gemmes pr. figur i `D2MapDB`.
 | Fil | Indhold |
 |---|---|
 | `D2Map/D2Map.toc` | Metadata, `SavedVariablesPerCharacter: D2MapDB`, Questie som valgfri afhængighed |
-| `D2Map/D2Map.lua` | Hele addon'en, delt i 14 afsnit (defaults, koordinater, rammer, terræn, adaptere, pins, klyngeformer, fading, løkke, `Set()`, indstillingsvindue, kommandoer, events) |
+| `D2Map/D2Map.lua` | Hele addon'en, delt i 15 afsnit (defaults, koordinater, rammer, terræn, adaptere, pins, klyngeformer, guidens vej, fading, løkke, `Set()`, indstillingsvindue, kommandoer, events) |
 | `D2Map/Bindings.xml` | De tre tastaturgenveje |
 | `D2Map/Data/MinimapTiles.lua` | Fil-id'er for minimap-fliserne. **Genereret** af `scripts/byg-fliser.lua` |
 | `D2Map/Media/mask-*.tga` | Maskerne til de bløde kanter. **Genereret** af `scripts/byg-masker.py` |
@@ -108,6 +109,21 @@ Indstillingerne gemmes pr. figur i `D2MapDB`.
   (fingeraftryk af hele tal), zoomet ændres, eller spilleren har flyttet sig en
   kvart ramme. Stykker uden for rammen tegnes ikke. Se `docs/former.png`;
   justér konstanterne `LOOP_…` og kør `lua test/tegn.lua` for at se virkningen.
+- **Guidens vej** (afsnit 9). `Factoruide.Pathing:Remaining(kontinent, nord,
+  vest)` er den funktion, Factoruide selv tegner sin grønne prikkede streg ud
+  fra (`Factoruide_Guide/PathLines.lua`): resten af vejen til guidens sted som
+  `{ nord, vest }` i de samme verdenskoordinater som D2Map – uden om stejlt
+  terræn, når guiden har planlagt det. D2Map kalder den højst ti gange i
+  sekundet og tegner prikker (samme tekstur og farve) hver 9. pixel, talt fra
+  *målet*, så de står stille på jorden, mens man går. Målet får et gult mærke;
+  ligger det uden for rammen, sidder et mindre mærke på kanten. Er guiden skjult
+  (`uiShown`), eller har Factoruide slået sin vej fra (`pathMode`), er der
+  ingen streg. Andre guider: `D2Map.RegisterPathSource("navn", { name,
+  IsAvailable(), GetPath(kontinent, nord, vest) })`.
+- **200 lokale.** Lua tillader højst 200 lokale variabler i én funktion, og
+  hele filen er én. Afsnit 8 og 9 ligger derfor i `do … end`-blokke og viser
+  kun deres funktioner udad. `luac -p` fanger grænsen; upvalues pr. funktion
+  (højst 60 i spillets Lua 5.1, 255 i Lua 5.5) tjekkes med `luac -l`.
 - **Rotation.** `SetViewAngle` sættes én gang pr. opdatering, og `ToScreen`
   drejer hvert punkt med uret med figurens retning, så fliser, pins og former er
   enige (også klyngeformerne). Fliserne drejes om deres egen midte og flyttes til den drejede plads.
@@ -148,7 +164,7 @@ skiftes ud (ingen `C_Map`), og fliserne skal hentes med sti i stedet for fil-id.
 
 Lars' skærmbilleder 2026-11-11: terræn, bløde runde kanter, Questies pins og
 spillerens pil (1.0) og indstillingsvinduet (1.1) virker. Rotationen (1.2) og
-klyngeformerne (1.3) er ikke set i spillet endnu – især lænkeafstanden er et
+klyngeformerne (1.3) og guidens vej (1.4) er ikke set i spillet endnu – især lænkeafstanden er et
 gæt, indtil den er set mod Questies rigtige pins – og det er ikke afklaret, om
 `UnitPosition` er hemmelig i combat (så er automappet tomt i combat).
 

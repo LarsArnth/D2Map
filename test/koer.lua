@@ -233,6 +233,7 @@ tjek("click-through som standard (EnableMouse(false))", root.mus == false and ca
 tjek("Alt+M lagt på toggle og gemt", bindinger["ALT-M"] == "D2MAP_TOGGLE" and gemtBindinger == 1)
 tjek("genvejen tilbydes kun én gang", D2MapDB.bindingOffered == true)
 
+local PRIK = "Interface\\COMMON\\Indicator-Gray"         -- prikken i guidens vej
 local function kor(sekunder, skridt)
     skridt = skridt or 0.02
     for _ = 1, math.floor(sekunder / skridt + 0.5) do root.scripts.OnUpdate(root, skridt) end
@@ -244,8 +245,28 @@ local function fliser()
 end
 local function pins()
     local t = {}
-    for _, b in ipairs(pinLayer.born) do if b.slags == "Texture" and b.shown then t[#t + 1] = b end end
+    for _, b in ipairs(pinLayer.born) do
+        if b.slags == "Texture" and b.shown and b.tekstur ~= PRIK then t[#t + 1] = b end
+    end
     return t
+end
+-- Prikkerne i guidens vej, og mærket ved målet (nil, når det er skjult).
+local function prikker()
+    local t = {}
+    for _, b in ipairs(pinLayer.born) do
+        if b.slags == "Texture" and b.shown and b.tekstur == PRIK then t[#t + 1] = b end
+    end
+    return t
+end
+local function maalmaerke()
+    for _, b in ipairs(pinLayer.born) do
+        if b.slags == "Texture" and b.tekstur == PRIK and b.shown == nil and b.synlig then return b end
+    end
+end
+local function prikVed(x, y)
+    for _, p in ipairs(prikker()) do
+        if taet(p.punkter.CENTER.x, x, 0.05) and taet(p.punkter.CENTER.y, y, 0.05) then return p end
+    end
 end
 local function linjer()
     local t = {}
@@ -460,6 +481,9 @@ felt.route:Klik()
 tjek("afkrydsning slår formerne fra", D2MapDB.route == false)
 felt.route:Klik()
 tjek("…og til igen", D2MapDB.route == true)
+felt.waypoint:Klik()
+tjek("afkrydsning slår guidens vej fra", D2MapDB.waypoint == false)
+felt.waypoint:Klik()
 felt.rotate:Klik()
 tjek("afkrydsning slår rotation til", D2MapDB.rotate == true)
 felt.rotate:Klik()
@@ -614,6 +638,76 @@ slash("route on")
 kor(1.2)
 tjek("/d2map route on (det gamle navn virker også)", #former() == 1)
 
+print("Guidens vej (Factoruide)")
+saet({})                                               -- ingen mål: kun vejen
+tjek("uden Factoruide tegnes ingen vej", #prikker() == 0 and maalmaerke() == nil)
+-- En attrap af Factoruide: Pathing:Remaining giver resten af vejen som { nord, vest }.
+local vej, guidenSkjult = nil, false
+Factoruide = {
+    Get = function(_, noegle) if noegle == "uiShown" then return not guidenSkjult end end,
+    Pathing = { Remaining = function(_, kontinent, nord, vest) return vej and vej(nord, vest, kontinent) end },
+}
+-- Lige mod nord: 100 yards = 112 pixels. Prikkerne ligger 9 pixels fra hinanden, talt fra målet.
+vej = function(n, w) return { { n, w }, { udgangsNord + 100, udgangsVest } } end
+kor(0.3)
+tjek("en lige vej mod nord giver en række prikker lige op", #prikker() == 11 and prikVed(0, 103) and prikVed(0, 94) and prikVed(0, 13),
+    #prikker())
+local maerke = maalmaerke()
+tjek("målet er mærket med gult på stedet", maerke and taet(maerke.punkter.CENTER.x, 0) and taet(maerke.punkter.CENTER.y, 112)
+    and maerke.bredde == 14 and maerke.farve[1] == 1)
+tjek("prikkerne har Factoruides grønne farve", prikker()[1].farve[2] > 0.8 and prikker()[1].farve[1] < 0.4)
+spiller.nord = spiller.nord + 4                        -- gå 4 yards mod målet
+kor(0.3)
+tjek("prikkerne står stille på jorden, mens man går (brødkrummer)", prikVed(0, 103 - 4 * px) ~= nil and prikVed(0, 94 - 4 * px) ~= nil)
+tjek("…og den nærmeste forsvinder under spillerens pil", #prikker() == 10, #prikker())
+spiller.nord = spiller.nord - 4
+
+vej = function(n, w) return { { n, w }, { udgangsNord, udgangsVest - 1000 } } end   -- 1000 yards mod øst
+kor(0.3)
+maerke = maalmaerke()
+tjek("et mål uden for rammen: stregen løber ud til kanten", #prikker() == 27 and prikVed(247, 0) and prikVed(13, 0), #prikker())
+tjek("…og et mindre mærke på kanten viser retningen", maerke and taet(maerke.punkter.CENTER.x, 252) and taet(maerke.punkter.CENTER.y, 0)
+    and maerke.bredde == 10)
+
+-- En vej med et knæk: 100 yards øst, så 100 yards nord.
+vej = function(n, w) return { { n, w }, { udgangsNord, udgangsVest - 100 }, { udgangsNord + 100, udgangsVest - 100 } } end
+kor(0.3)
+tjek("en vej med knæk følges rundt om hjørnet", prikVed(112, 103) and prikVed(112, 4) and prikVed(107, 0) and prikVed(17, 0)
+    and not prikVed(56, 56), #prikker())
+
+guidenSkjult = true
+kor(0.3)
+tjek("er guiden skjult, vises vejen heller ikke her", #prikker() == 0 and maalmaerke() == nil)
+guidenSkjult = false
+slash("waypoint off")
+kor(0.3)
+tjek("/d2map waypoint off", #prikker() == 0 and maalmaerke() == nil)
+slash("waypoint on")
+kor(0.3)
+tjek("/d2map waypoint on", #prikker() > 10)
+
+vej = function() error("guiden fejler") end
+kor(0.3)
+tjek("fejler guiden, tegnes der bare ingen vej", #prikker() == 0 and root.synlig and canvas.synlig)
+vej = function() return { { "x", 1 }, { 2, 3 } } end
+kor(0.3)
+tjek("vrøvl fra guiden tegnes ikke", #prikker() == 0)
+vej = function(n, w, kontinent) return kontinent == 0 and { { n, w }, { udgangsNord + 100, udgangsVest } } or nil end
+
+D2Map.RegisterPathSource("anden", {
+    name = "Anden guide",
+    IsAvailable = function() return true end,
+    GetPath = function(_, n, w) return { { n, w }, { udgangsNord - 100, udgangsVest } } end,
+})
+kor(0.3)
+tjek("den første kilde med en vej vinder (Factoruide før en senere)", prikVed(0, 103) ~= nil)
+vej = nil
+kor(0.3)
+tjek("en anden registreret kilde bruges, når Factoruide ikke har en vej", prikVed(0, -103) ~= nil)
+D2Map.RegisterPathSource("anden", { name = "Anden guide", IsAvailable = function() return false end, GetPath = function() end })
+vej = function(n, w) return { { n, w }, { udgangsNord + 100, udgangsVest } } end
+kor(0.3)
+
 print("Rotation efter figurens retning")
 maal = { { 0, -50 }, { 80, 0 } }                       -- ét mål 50 yards mod vest, ét 80 mod nord
 spiller.retning = math.pi / 2                          -- figuren ser mod vest
@@ -625,6 +719,7 @@ kor(0.2)
 tjek("rotate: det, figuren ser mod (vest), står lige op", pinVed(0, 50 * px) ~= nil)
 tjek("rotate: nord ligger til højre", pinVed(80 * px, 0) ~= nil)
 tjek("rotate: pilen peger lige op", taet(pinLayer.born[1].rotation, 0))
+tjek("rotate: guidens vej mod nord går til højre", prikVed(103, 0) ~= nil and prikVed(0, 103) == nil)
 maal = { { 100, -20 }, { 130, 10 }, { 150, -30 }, { 110, 30 }, { 0, -50 }, { 80, 0 } }   -- plus en lejr mod nord
 kor(1.2)
 local midtX, midtY, n = 0, 0, 0
@@ -681,7 +776,7 @@ tjek("/d2map bind ctrl-n", bindinger["CTRL-N"] == "D2MAP_TOGGLE")
 print("Nulstilling og gemte indstillinger")
 slash("reset")
 tjek("/d2map reset", D2MapDB.opacity == 40 and D2MapDB.span == 500 and D2MapDB.bindingOffered == true
-    and D2MapDB.terrain == false and D2MapDB.route == true and D2MapDB.rotate == false)
+    and D2MapDB.terrain == false and D2MapDB.route == true and D2MapDB.rotate == false and D2MapDB.waypoint == true)
 -- En ødelagt SavedVariables-fil: indlæs addon'en forfra og se, at den retter op.
 D2MapDB.opacity = "vrøvl"
 D2MapDB.size = 99999

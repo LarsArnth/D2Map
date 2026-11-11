@@ -14,12 +14,13 @@
 --   6. Adaptere til quest-pins (Questie, Blizzards egne quest-punkter)
 --   7. Pins på automappet
 --   8. Former om klyngerne af quest-mål
---   9. Gennemsigtighed og fading i combat
---  10. Opdateringsløkken (droslet OnUpdate)
---  11. Indstillinger: ét sted, hvor en værdi sættes
---  12. Indstillingsvinduet (/d2map)
---  13. Offentlig API, tastaturgenveje og slash-kommandoer
---  14. Events
+--   9. Guidens vej (waypoint-stregen fra fx Factoruide)
+--  10. Gennemsigtighed og fading i combat
+--  11. Opdateringsløkken (droslet OnUpdate)
+--  12. Indstillinger: ét sted, hvor en værdi sættes
+--  13. Indstillingsvinduet (/d2map)
+--  14. Offentlig API, tastaturgenveje og slash-kommandoer
+--  15. Events
 --
 -- Skrevet til WoW: Forever (interface 16001), men bruger kun API'er, der også
 -- findes i Classic Era, og tjekker for hver af dem, om den findes.
@@ -49,6 +50,7 @@ local DEFAULTS = {
     edgePins       = true,     -- vis nærmeste pin for hver quest på kanten, når den er uden for
     route          = true,     -- tegn en blød form om hver klynge af quest-mål
     rotate         = false,    -- drej kortet, så det, figuren ser mod, er opad (ellers nord opad)
+    waypoint       = true,     -- vis guidens vej (fx Factoruides grønne prikkede streg)
     source         = "auto",   -- auto | questie | blizzard (hvilken adapter)
     strata         = "LOW",    -- frame strata: under de fleste UI-elementer
     x              = 0,        -- forskydning fra skærmens midte
@@ -109,7 +111,7 @@ local PIN_KINDS = {
 -- 2. Hjælpefunktioner
 --------------------------------------------------------------------------------
 
-local floor, abs, sqrt, min, max = math.floor, math.abs, math.sqrt, math.min, math.max
+local floor, ceil, abs, sqrt, min, max = math.floor, math.ceil, math.abs, math.sqrt, math.min, math.max
 local sin, cos = math.sin, math.cos
 local pairs, ipairs, type, tonumber, tostring, pcall = pairs, ipairs, type, tonumber, tostring, pcall
 local wipe = wipe or function(t) for k in pairs(t) do t[k] = nil end return t end
@@ -330,7 +332,7 @@ local function SavePosition()
     ApplyLayout()
 end
 
-local SetSpan                  -- defineres i afsnit 11; bruges af musehjulet
+local SetSpan                  -- defineres i afsnit 12; bruges af musehjulet
 
 local function CreateFrames()
     root = CreateFrame("Frame", "D2MapFrame", UIParent)
@@ -850,6 +852,12 @@ end
 -- et godt stykke – ikke hvert sekund.
 --------------------------------------------------------------------------------
 
+-- Lua tillader højst 200 lokale variabler i én funktion, og hele filen er én.
+-- Afsnittets egne konstanter og arbejdstabeller bor derfor i en blok; kun de
+-- tre funktioner herunder kan ses udefra.
+local BuildLoops, UpdateLoops, LoopStatus
+do
+
 local LOOP_MAX_POINTS = 250        -- kun de nærmeste mål regnes med
 local LOOP_MERGE_YARDS = 8         -- mål tættere end det er samme sted
 local LOOP_MIN_CLUSTER = 3         -- så mange mål skal der til en form
@@ -1021,7 +1029,7 @@ end
 
 -- Regner formerne ud, hvis der er grund til det. Kaldes, når pins er hentet
 -- (ca. én gang i sekundet), men gør for det meste ingenting.
-local function BuildLoops(continent, north, west)
+function BuildLoops(continent, north, west)
     if not db.route or recordCount == 0 then
         loopCount, builtSignature = 0, nil
         return
@@ -1154,7 +1162,7 @@ end
 
 -- Flytter formernes linjer i forhold til spilleren. Kaldes ved hver opdatering.
 -- Et stykke tegnes kun, når begge ender ligger inden for rammen.
-local function UpdateLoops(north, west)
+function UpdateLoops(north, west)
     local count = (db.route and pinLayer.CreateLine) and loopCount or 0
     local pxPerYard = db.size / db.span
     local reach = db.size / 2 * (PIN_REACH[db.shape] or 0.9)
@@ -1201,8 +1209,246 @@ local function UpdateLoops(north, west)
     loopLinesShown = used
 end
 
+-- Til /d2map status: antal former, lænkeafstanden og antal linjestykker tegnet.
+function LoopStatus()
+    return loopCount, loopLink, loopLinesShown
+end
+
+end -- afsnit 8
+
 --------------------------------------------------------------------------------
--- 9. Gennemsigtighed og fading i combat
+-- 9. Guidens vej (waypoint-stregen)
+--
+-- En prikket grøn streg fra spilleren til det sted, en guide-addon peger på –
+-- den samme vej, guiden selv tegner på verdenskortet og minimappet. Ligger
+-- stedet uden for rammen, løber stregen ud til kanten, og et mærke på kanten
+-- viser retningen.
+--
+-- En kilde er en tabel med:
+--     name                              navnet, der vises i /d2map status
+--     IsAvailable()                     true, når addon'en er indlæst
+--     GetPath(continent, north, west)   vejen fra spilleren som en liste af
+--                                       { nord, vest } i verdenskoordinater
+--                                       (mindst to punkter), eller nil
+-- Flere kilder registreres med D2Map.RegisterPathSource("navn", kilde).
+--
+-- Prikkerne ligger på faste afstande fra MÅLET, ikke fra spilleren. Så står de
+-- stille på jorden som brødkrummer, mens man går, i stedet for at kravle med.
+--------------------------------------------------------------------------------
+
+local RegisterPathSource, UpdatePath, RefetchPath, PathStatus
+do                                 -- en blok, af samme grund som afsnit 8
+
+local PATH_STEP_PIXELS = 9         -- afstand mellem prikkerne på skærmen
+local PATH_MAX_DOTS = 120          -- loft over prikker tegnet på én gang
+local PATH_REFRESH = 0.1           -- sekunder mellem at vejen hentes fra kilden
+local PATH_DOT = "Interface\\COMMON\\Indicator-Gray"   -- den prik, Factoruide selv bruger
+local PATH_COLOR = { 0.29, 0.87, 0.50 }                -- … og dens grønne farve
+local GOAL_COLOR = { 1.00, 0.82, 0.10 }
+
+local pathSources, pathSourceOrder = {}, {}
+
+function RegisterPathSource(key, source)
+    if type(key) ~= "string" or type(source) ~= "table"
+        or type(source.IsAvailable) ~= "function" or type(source.GetPath) ~= "function" then
+        error("D2Map.RegisterPathSource(key, source): source needs IsAvailable() and GetPath(continent, north, west)", 2)
+    end
+    key = key:lower()
+    if not pathSources[key] then pathSourceOrder[#pathSourceOrder + 1] = key end
+    pathSources[key] = source
+end
+
+---- Factoruide ----------------------------------------------------------------
+-- Factoruide.Pathing:Remaining(kontinent, nord, vest) er den funktion, guiden
+-- selv tegner sin streg ud fra: resten af vejen til stedet, uden om stejlt
+-- terræn når guiden har planlagt det sådan, ellers lige. Den læser kun.
+
+RegisterPathSource("factoruide", {
+    name = "Factoruide",
+    IsAvailable = function()
+        local guide = Factoruide
+        return type(guide) == "table" and type(guide.Pathing) == "table"
+            and type(guide.Pathing.Remaining) == "function"
+    end,
+    GetPath = function(continent, north, west)
+        local guide = Factoruide
+        -- Er guiden skjult, viser den heller ikke sin egen streg.
+        if type(guide.Get) == "function" and guide:Get("uiShown") == false then return nil end
+        return guide.Pathing:Remaining(continent, north, west)
+    end,
+})
+
+local pathPoints               -- vejen, som kilden gav den (nil = ingen)
+local pathFromPlayer = false   -- begynder vejen dér, hvor spilleren stod, da den blev hentet?
+local pathSourceName = "none"
+local pathAge = PATH_REFRESH   -- sekunder siden vejen blev hentet
+local pathYards = 0            -- vejens længde, til /d2map status
+local pathDots, pathDotsShown = {}, 0
+local pathGoal                 -- mærket ved målet
+
+-- Henter vejen fra den første kilde, der har en. Fejler en kilde, eller giver
+-- den noget, der ikke er tal, springes den over.
+local function FetchPath(continent, north, west)
+    pathPoints, pathSourceName = nil, "none"
+    if not db.waypoint then return end
+    for _, key in ipairs(pathSourceOrder) do
+        local source = pathSources[key]
+        local okAvailable, available = pcall(source.IsAvailable)
+        if okAvailable and available then
+            local ok, points = pcall(source.GetPath, continent, north, west)
+            if ok and type(points) == "table" and #points >= 2 then
+                local valid = true
+                for i = 1, #points do
+                    local point = points[i]
+                    if type(point) ~= "table" or not IsNumber(point[1]) or not IsNumber(point[2]) then
+                        valid = false
+                        break
+                    end
+                end
+                if valid then
+                    pathPoints, pathSourceName = points, source.name or key
+                    pathFromPlayer = points[1][1] == north and points[1][2] == west
+                    return
+                end
+            end
+        end
+    end
+end
+
+local function AcquireDot(index)
+    local dot = pathDots[index]
+    if dot then return dot end
+    dot = pinLayer:CreateTexture(nil, "ARTWORK", nil, -1)  -- under pins, over klyngeformerne
+    dot:SetTexture(PATH_DOT)
+    dot:SetSize(6, 6)
+    dot:SetVertexColor(PATH_COLOR[1], PATH_COLOR[2], PATH_COLOR[3])
+    pathDots[index] = dot
+    return dot
+end
+
+-- Tegner vejen i forhold til spilleren. Kaldes ved hver opdatering; selve vejen
+-- hentes højst ti gange i sekundet, også mens kortet drejer hver frame.
+function UpdatePath(continent, north, west, elapsed)
+    pathAge = pathAge + elapsed
+    if pathAge >= PATH_REFRESH then
+        pathAge = 0
+        FetchPath(continent, north, west)
+    end
+    local shown = 0
+    local points = db.waypoint and pathPoints
+    if points then
+        local pxPerYard = db.size / db.span
+        local reach = db.size / 2 * (PIN_REACH[db.shape] or 0.9)        -- pixels
+        local roundShape = db.shape == "round"
+        -- Alt inden for denne afstand (yards) kan ligge i rammen; en firkant når ud i hjørnerne.
+        local radius = reach / pxPerYard * (roundShape and 1 or 1.4143)
+        local step = PATH_STEP_PIXELS / pxPerYard
+        local count = #points
+
+        -- Vejen begynder ved spilleren, som har flyttet sig siden den blev hentet.
+        local startNorth, startWest = points[1][1], points[1][2]
+        if pathFromPlayer then startNorth, startWest = north, west end
+
+        local total, fromNorth, fromWest = 0, startNorth, startWest
+        for i = 2, count do
+            local dn, dw = points[i][1] - fromNorth, points[i][2] - fromWest
+            total = total + sqrt(dn * dn + dw * dw)
+            fromNorth, fromWest = points[i][1], points[i][2]
+        end
+        pathYards = total
+
+        local walked = 0                                   -- yards fra vejens start til dette stykke
+        fromNorth, fromWest = startNorth, startWest
+        for i = 2, count do
+            local dn, dw = points[i][1] - fromNorth, points[i][2] - fromWest
+            local length = sqrt(dn * dn + dw * dw)
+            if length > 0 then
+                -- Den del af stykket, der ligger inden for rammen: løs
+                -- |fra + t · (dn, dw) - spiller|² = radius² for t mellem 0 og 1.
+                local offNorth, offWest = fromNorth - north, fromWest - west
+                local a = length * length
+                local b = offNorth * dn + offWest * dw
+                local c = offNorth * offNorth + offWest * offWest - radius * radius
+                local disc = b * b - a * c
+                if disc > 0 then
+                    local root = sqrt(disc)
+                    local t0, t1 = max(0, (-b - root) / a), min(1, (-b + root) / a)
+                    if t0 < t1 then
+                        -- Prik nr. k ligger k · step yards fra målet (nr. 0 er målet selv).
+                        local nearest = max(1, ceil((total - walked - t1 * length) / step))
+                        local farthest = floor((total - walked - t0 * length) / step)
+                        for k = farthest, nearest, -1 do
+                            if shown >= PATH_MAX_DOTS then break end
+                            local t = (total - k * step - walked) / length
+                            local x, y = ToScreen((west - (fromWest + t * dw)) * pxPerYard,
+                                (fromNorth + t * dn - north) * pxPerYard)
+                            -- Ikke oven i spillerens pil, og ikke uden for en firkantet ramme.
+                            if x * x + y * y > 144 and (roundShape or (abs(x) <= reach and abs(y) <= reach)) then
+                                shown = shown + 1
+                                local dot = AcquireDot(shown)
+                                dot:SetPoint("CENTER", pinLayer, "CENTER", x, y)
+                                if not dot.shown then
+                                    dot:Show()
+                                    dot.shown = true
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+            walked = walked + length
+            fromNorth, fromWest = points[i][1], points[i][2]
+        end
+
+        -- Målet: et gult mærke på stedet, eller mindre på kanten i dets retning.
+        local goal = points[count]
+        local x, y = ToScreen((west - goal[2]) * pxPerYard, (goal[1] - north) * pxPerYard)
+        local inside
+        if roundShape then
+            inside = x * x + y * y <= reach * reach
+        else
+            inside = abs(x) <= reach and abs(y) <= reach
+        end
+        local size, alpha = 14, 1
+        if not inside then
+            local factor = roundShape and reach / sqrt(x * x + y * y) or reach / max(abs(x), abs(y))
+            x, y, size, alpha = x * factor, y * factor, 10, 0.8
+        end
+        if not pathGoal then
+            pathGoal = pinLayer:CreateTexture(nil, "ARTWORK", nil, 4)
+            pathGoal:SetTexture(PATH_DOT)
+        end
+        pathGoal:SetSize(size, size)
+        pathGoal:SetVertexColor(GOAL_COLOR[1], GOAL_COLOR[2], GOAL_COLOR[3], alpha)
+        pathGoal:SetPoint("CENTER", pinLayer, "CENTER", x, y)
+        pathGoal:Show()
+    elseif pathGoal then
+        pathGoal:Hide()
+    end
+    for i = shown + 1, #pathDots do
+        local dot = pathDots[i]
+        if dot.shown then
+            dot:Hide()
+            dot.shown = false
+        end
+    end
+    pathDotsShown = shown
+end
+
+-- Hent vejen forfra ved næste opdatering (indstillingen er lige ændret).
+function RefetchPath()
+    pathAge = PATH_REFRESH
+end
+
+-- Til /d2map status: kildens navn, yards til målet og antal prikker tegnet.
+function PathStatus()
+    return pathSourceName, pathPoints and pathYards or 0, pathDotsShown
+end
+
+end -- afsnit 9
+
+--------------------------------------------------------------------------------
+-- 10. Gennemsigtighed og fading i combat
 --
 -- Terrænet får den valgte gennemsigtighed; pins og pilen er pinBoost gange mere
 -- synlige (ellers drukner de). I combat glider begge ned til combatOpacity.
@@ -1249,7 +1495,7 @@ local function SnapAlpha()
 end
 
 --------------------------------------------------------------------------------
--- 10. Opdateringsløkken
+-- 11. Opdateringsløkken
 --
 -- OnUpdate sidder på root, så et skjult automap koster ingenting. Fliser og
 -- pins opdateres hvert updateInterval sekund (0,1 som standard), ikke hver frame.
@@ -1294,6 +1540,8 @@ local function Tick(elapsed)
     UpdatePins(continent, north, west)
     UpdateLoops(north, west)
 
+    UpdatePath(continent, north, west, elapsed)
+
     -- Pilen viser figurens retning på kortet: lige op, når kortet drejer med.
     if arrow.SetRotation then arrow:SetRotation((facing or 0) - viewAngle) end
 end
@@ -1334,20 +1582,20 @@ local function ApplyEnabled()
 end
 
 --------------------------------------------------------------------------------
--- 11. Indstillinger: ét sted, hvor en værdi sættes
+-- 12. Indstillinger: ét sted, hvor en værdi sættes
 --
 -- Indstillingsvinduet, slash-kommandoerne og tastaturgenvejene går alle gennem
 -- Set(), så de aldrig kommer ud af trit: ændrer man noget ét sted, følger de
 -- andre med.
 --------------------------------------------------------------------------------
 
-local RefreshOptions = function() end      -- erstattes i afsnit 12, når vinduet er bygget
+local RefreshOptions = function() end      -- erstattes i afsnit 13, når vinduet er bygget
 
 local function Redraw() forceTick = true end
 local function Resync() forceSync = true forceTick = true end
 
 -- Hvad der skal ske, når en indstilling har fået ny værdi. Gennemsigtighed står
--- her ikke: toningen (afsnit 9) finder selv det nye mål.
+-- her ikke: toningen (afsnit 10) finder selv det nye mål.
 local AFTER = {
     enabled  = ApplyEnabled,
     size     = ApplyLayout,
@@ -1359,6 +1607,7 @@ local AFTER = {
     edgePins = Redraw,
     terrain  = Redraw,
     rotate   = Redraw,
+    waypoint = function() RefetchPath() Redraw() end,
     route    = Resync,
     pins     = Resync,
     source   = Resync,
@@ -1404,7 +1653,7 @@ local function ResetAll()
 end
 
 --------------------------------------------------------------------------------
--- 12. Indstillingsvinduet (/d2map)
+-- 13. Indstillingsvinduet (/d2map)
 --
 -- Et lille vindue med afkrydsningsfelter, skydere og valg. Alt virker med det
 -- samme, så man kan se automappet ændre sig, mens man trækker. Vinduet bygges
@@ -1559,7 +1808,8 @@ local function CreateOptions()
         return ("Pin size: %.1fx"):format(v)
     end)
     byKey.edgePins = MakeCheck(frame, Row(26), "Show nearest off-map objective on the rim", "edgePins")
-    byKey.route = MakeCheck(frame, Row(30), "Outline each cluster of objectives", "route")
+    byKey.route = MakeCheck(frame, Row(26), "Outline each cluster of objectives", "route")
+    byKey.waypoint = MakeCheck(frame, Row(30), "Show the guide's path (Factoruide)", "waypoint")
 
     byKey.terrain = MakeCheck(frame, Row(26), "Show terrain (minimap tiles)", "terrain")
     byKey.style = MakeChoice(frame, Row(26), "Look", "style", {
@@ -1612,7 +1862,7 @@ local function ToggleOptions()
 end
 
 --------------------------------------------------------------------------------
--- 13. Offentlig API, tastaturgenveje og slash-kommandoer
+-- 14. Offentlig API, tastaturgenveje og slash-kommandoer
 --------------------------------------------------------------------------------
 
 -- Globale navne: bruges af Bindings.xml og af andre addons.
@@ -1620,6 +1870,7 @@ D2Map = {
     Toggle = Toggle,
     ToggleOptions = ToggleOptions,
     RegisterAdapter = RegisterAdapter,
+    RegisterPathSource = RegisterPathSource,
     EmitPin = EmitPin,
 }
 
@@ -1709,6 +1960,7 @@ local function PrintHelp()
         "/d2map edge <on|off> – nearest off-map objective on the rim (now " .. OnOff(db.edgePins) .. ")",
         "/d2map outlines <on|off> – a soft outline around each cluster of objectives (now " .. OnOff(db.route) .. ")",
         "/d2map rotate <on|off> – turn the map to the way you face (now " .. OnOff(db.rotate) .. ")",
+        "/d2map waypoint <on|off> – the guide's dotted path, e.g. Factoruide's (now " .. OnOff(db.waypoint) .. ")",
         "/d2map terrain <on|off> – minimap tiles (now " .. OnOff(db.terrain) .. ")",
         "/d2map source <auto|questie|blizzard> – where pins come from (now " .. db.source .. ")",
         "/d2map bind [key] – put a key on toggle (Alt+M if none given)",
@@ -1736,8 +1988,10 @@ local function PrintStatus()
     end
     Print(("pins: %s, source %s, %d known, %d drawn%s"):format(
         db.pins, activeAdapterName, recordCount, pinsShown, mask and "" or "; no mask support, using hard edges"))
+    local clusters, link, pieces = LoopStatus()
     Print(("outlines: %s, %d clusters (objectives within %d yards belong together), %d line pieces drawn; map %s"):format(
-        OnOff(db.route), loopCount, loopLink, loopLinesShown, db.rotate and "rotates with you" or "north up"))
+        OnOff(db.route), clusters, link, pieces, db.rotate and "rotates with you" or "north up"))
+    Print(("guide path: %s, source %s, %.0f yards to go, %d dots drawn"):format(OnOff(db.waypoint), PathStatus()))
     if tickFailed then Print("the update loop is stopped after an error – /d2map toggle twice to retry.") end
 end
 
@@ -1827,6 +2081,8 @@ commands.terrain = function(rest) SetFlag("terrain", rest, "terrain") end
 commands.route = function(rest) SetFlag("route", rest, "outlines") end
 commands.outlines = commands.route
 commands.rotate = function(rest) SetFlag("rotate", rest, "rotate") end
+commands.waypoint = function(rest) SetFlag("waypoint", rest, "guide path") end
+commands.path = commands.waypoint
 commands.source = function(rest) SetChoice("source", rest, SOURCES, "source") end
 
 commands.unlock = function()
@@ -1889,7 +2145,7 @@ SLASH_D2MAP2 = "/automap"
 SlashCmdList["D2MAP"] = SlashHandler
 
 --------------------------------------------------------------------------------
--- 14. Events
+-- 15. Events
 --------------------------------------------------------------------------------
 
 local events = CreateFrame("Frame")
