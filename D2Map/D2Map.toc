@@ -2,7 +2,7 @@
 ## Title: |cffc8a04bD2|rMap
 ## Notes: Diablo II-style automap: a click-through, see-through terrain map in the middle of the screen with Questie's quest pins. /d2map
 ## Author: Lars Arnth
-## Version: 1.5.0
+## Version: 1.5.1
 ## Category: Map
 ## X-Category: Map
 ## IconTexture: Interface\Icons\INV_Misc_Map_01

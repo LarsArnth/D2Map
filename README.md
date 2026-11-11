@@ -7,7 +7,7 @@ bevægelse og targeting går lige igennem.
 
 ```sh
 ./installer.sh        # kopierer D2Map/ ind i spillets AddOns-mappe
-lua test/koer.lua     # 149 tjek mod en attrap af WoW's API
+lua test/koer.lua     # 151 tjek mod en attrap af WoW's API
 lua test/tegn.lua     # tegner formerne for nogle prøvesæt til docs/former.svg
 ```
 
@@ -58,7 +58,7 @@ Indstillingerne gemmes pr. figur i `D2MapDB`.
 | `D2Map/D2Map.lua` | Hele addon'en, delt i 15 afsnit (defaults, koordinater, rammer, terræn, adaptere, pins, klyngeformer, guidens vej, fading, løkke, `Set()`, indstillingsvindue, kommandoer, events) |
 | `D2Map/Bindings.xml` | De tre tastaturgenveje |
 | `D2Map/Data/MinimapTiles.lua` | Fil-id'er for minimap-fliserne. **Genereret** af `scripts/byg-fliser.lua` |
-| `D2Map/Media/mask-*.tga` | Maskerne til de bløde kanter. **Genereret** af `scripts/byg-masker.py` |
+| `D2Map/Media/*.tga` | Maskerne til de bløde kanter og prikken til guidens vej. **Genereret** af `scripts/byg-masker.py` |
 | `test/tegn.lua` | Tegner klyngeformerne for fem prøvesæt, så man kan se dem (`docs/former.png`) |
 | `test/koer.lua` | Testen: indlæser addon'en mod en attrap, der kun kender de API-metoder, addon'en må bruge |
 
@@ -120,8 +120,10 @@ Indstillingerne gemmes pr. figur i `D2MapDB`.
   fra (`Factoruide_Guide/PathLines.lua`): resten af vejen til guidens sted som
   `{ nord, vest }` i de samme verdenskoordinater som D2Map – uden om stejlt
   terræn, når guiden har planlagt det. D2Map kalder den højst ti gange i
-  sekundet og tegner prikker (samme tekstur og farve) hver 9. pixel, talt fra
-  *målet*, så de står stille på jorden, mens man går. Målet får et gult mærke;
+  sekundet og tegner prikker hver 9. pixel, talt fra
+  *målet*, så de står stille på jorden, mens man går. Prikken er D2Maps egen
+  (`Media/dot.tga`, hvid med sort kant): Factoruides grå prik farvet grøn blev
+  mørkegrøn og kunne ikke ses oven på spillet (Lars, 2026-11-11). Målet får et gult mærke;
   ligger det uden for rammen, sidder et mindre mærke på kanten. Er guiden skjult
   (`uiShown`), eller har Factoruide slået sin vej fra (`pathMode`), er der
   ingen streg. Andre guider: `D2Map.RegisterPathSource("navn", { name,
@@ -168,11 +170,14 @@ skiftes ud (ingen `C_Map`), og fliserne skal hentes med sti i stedet for fil-id.
 
 ## Afprøvet i spillet
 
-Lars' skærmbilleder 2026-11-11: terræn, bløde runde kanter, Questies pins og
-spillerens pil (1.0) og indstillingsvinduet (1.1) virker. Rotationen (1.2) og
-klyngeformerne (1.3) og guidens vej (1.4) er ikke set i spillet endnu – især lænkeafstanden er et
-gæt, indtil den er set mod Questies rigtige pins – og det er ikke afklaret, om
-`UnitPosition` er hemmelig i combat (så er automappet tomt i combat).
+Lars' skærmbilleder og tilbagemeldinger 2026-11-11: terræn, bløde runde kanter,
+Questies pins og spillerens pil (1.0), indstillingsvinduet (1.1) og guidens vej
+(1.4) virker. Vejen var for mørk til at se; den lyse prik (1.5.1) er ikke set i
+spillet endnu. Det er rotationen (1.2), klyngeformerne (1.3) og
+gennemsigtigheden i bevægelse (1.5) heller ikke – især klyngernes
+lænkeafstand er et gæt, indtil den er set mod Questies rigtige pins – og det er
+ikke afklaret, om `UnitPosition` er hemmelig i combat (så er automappet tomt i
+combat).
 
 Lua-fejl står i `_forever_/Logs/General.log` (`[E][Lua]`), også uden fejlvisning
 slået til. Sker der en fejl i opdateringsløkken, skriver addon'en den én gang i

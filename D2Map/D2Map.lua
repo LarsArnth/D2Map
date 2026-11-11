@@ -1242,12 +1242,16 @@ end -- afsnit 8
 local RegisterPathSource, UpdatePath, RefetchPath, PathStatus
 do                                 -- en blok, af samme grund som afsnit 8
 
-local PATH_STEP_PIXELS = 9         -- afstand mellem prikkerne på skærmen
+local PATH_STEP_PIXELS = 9         -- afstand mellem prikkerne på skærmen (ved pin-størrelse 1)
+local PATH_DOT_PIXELS = 7          -- prikkernes størrelse (ved pin-størrelse 1)
 local PATH_MAX_DOTS = 120          -- loft over prikker tegnet på én gang
 local PATH_REFRESH = 0.1           -- sekunder mellem at vejen hentes fra kilden
-local PATH_DOT = "Interface\\COMMON\\Indicator-Gray"   -- den prik, Factoruide selv bruger
-local PATH_COLOR = { 0.29, 0.87, 0.50 }                -- … og dens grønne farve
-local GOAL_COLOR = { 1.00, 0.82, 0.10 }
+-- Factoruide farver en grå prik grøn; grå gange grøn bliver mørkegrøn, og den
+-- forsvinder oven på spillet. Her er prikken hvid med sort kant (Media/dot.tga):
+-- det hvide får den rene farve, og kanten gør den synlig på lyst terræn.
+local PATH_DOT = MEDIA .. "dot.tga"
+local PATH_COLOR = { 0.35, 1.00, 0.45 }                -- klar grøn, som Factoruides streg
+local GOAL_COLOR = { 1.00, 0.85, 0.10 }
 
 local pathSources, pathSourceOrder = {}, {}
 
@@ -1323,7 +1327,6 @@ local function AcquireDot(index)
     if dot then return dot end
     dot = pinLayer:CreateTexture(nil, "ARTWORK", nil, -1)  -- under pins, over klyngeformerne
     dot:SetTexture(PATH_DOT)
-    dot:SetSize(6, 6)
     dot:SetVertexColor(PATH_COLOR[1], PATH_COLOR[2], PATH_COLOR[3])
     pathDots[index] = dot
     return dot
@@ -1345,7 +1348,10 @@ function UpdatePath(continent, north, west, elapsed)
         local roundShape = db.shape == "round"
         -- Alt inden for denne afstand (yards) kan ligge i rammen; en firkant når ud i hjørnerne.
         local radius = reach / pxPerYard * (roundShape and 1 or 1.4143)
-        local step = PATH_STEP_PIXELS / pxPerYard
+        -- Prikkerne følger pin-størrelsen, men kun halvt: en streg skal ikke blive til kugler.
+        local scale = 0.6 + 0.4 * db.pinScale
+        local dotSize = PATH_DOT_PIXELS * scale
+        local step = PATH_STEP_PIXELS * scale / pxPerYard
         local count = #points
 
         -- Vejen begynder ved spilleren, som har flyttet sig siden den blev hentet.
@@ -1389,6 +1395,10 @@ function UpdatePath(continent, north, west, elapsed)
                             if x * x + y * y > 144 and (roundShape or (abs(x) <= reach and abs(y) <= reach)) then
                                 shown = shown + 1
                                 local dot = AcquireDot(shown)
+                                if dot.px ~= dotSize then
+                                    dot:SetSize(dotSize, dotSize)
+                                    dot.px = dotSize
+                                end
                                 dot:SetPoint("CENTER", pinLayer, "CENTER", x, y)
                                 if not dot.shown then
                                     dot:Show()
@@ -1412,10 +1422,10 @@ function UpdatePath(continent, north, west, elapsed)
         else
             inside = abs(x) <= reach and abs(y) <= reach
         end
-        local size, alpha = 14, 1
+        local size, alpha = 14 * scale, 1
         if not inside then
             local factor = roundShape and reach / sqrt(x * x + y * y) or reach / max(abs(x), abs(y))
-            x, y, size, alpha = x * factor, y * factor, 10, 0.8
+            x, y, size, alpha = x * factor, y * factor, 10 * scale, 0.9
         end
         if not pathGoal then
             pathGoal = pinLayer:CreateTexture(nil, "ARTWORK", nil, 4)

@@ -233,7 +233,7 @@ tjek("click-through som standard (EnableMouse(false))", root.mus == false and ca
 tjek("Alt+M lagt på toggle og gemt", bindinger["ALT-M"] == "D2MAP_TOGGLE" and gemtBindinger == 1)
 tjek("genvejen tilbydes kun én gang", D2MapDB.bindingOffered == true)
 
-local PRIK = "Interface\\COMMON\\Indicator-Gray"         -- prikken i guidens vej
+local PRIK = "Interface\\AddOns\\D2Map\\Media\\dot.tga"   -- prikken i guidens vej
 local function kor(sekunder, skridt)
     skridt = skridt or 0.02
     for _ = 1, math.floor(sekunder / skridt + 0.5) do root.scripts.OnUpdate(root, skridt) end
@@ -695,7 +695,9 @@ tjek("en lige vej mod nord giver en række prikker lige op", #prikker() == 11 an
 local maerke = maalmaerke()
 tjek("målet er mærket med gult på stedet", maerke and taet(maerke.punkter.CENTER.x, 0) and taet(maerke.punkter.CENTER.y, 112)
     and maerke.bredde == 14 and maerke.farve[1] == 1)
-tjek("prikkerne har Factoruides grønne farve", prikker()[1].farve[2] > 0.8 and prikker()[1].farve[1] < 0.4)
+tjek("prikkerne er klart grønne og har deres egen lyse tekstur", prikker()[1].farve[2] == 1 and prikker()[1].farve[1] < 0.4
+    and prikker()[1].bredde == 7)
+tjek("teksturen findes i addon'en", io.open("D2Map/Media/dot.tga") ~= nil)
 spiller.nord = spiller.nord + 4                        -- gå 4 yards mod målet
 kor(0.3)
 tjek("prikkerne står stille på jorden, mens man går (brødkrummer)", prikVed(0, 103 - 4 * px) ~= nil and prikVed(0, 94 - 4 * px) ~= nil)
@@ -725,6 +727,11 @@ tjek("/d2map waypoint off", #prikker() == 0 and maalmaerke() == nil)
 slash("waypoint on")
 kor(0.3)
 tjek("/d2map waypoint on", #prikker() > 10)
+slash("pinsize 2")
+kor(0.3)
+tjek("prikkerne følger pin-størrelsen (halvt)", taet(prikker()[1].bredde, 7 * 1.4) and taet(maalmaerke().bredde, 14 * 1.4))
+slash("pinsize 1")
+kor(0.3)
 
 vej = function() error("guiden fejler") end
 kor(0.3)
