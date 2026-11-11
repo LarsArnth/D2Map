@@ -20,6 +20,24 @@ Fil til upload: `dist/D2Map-<version>.zip` fra `./scripts/pak.sh`. Vælg
 spilversionen for **WoW: Forever** (interface 16001), og «Release».
 Valgfrie afhængigheder: Questie og Factoruide Guide.
 
+## Upload med script
+
+Når projektet findes, kan nye versioner uploades uden om websiden:
+
+```sh
+./scripts/pak.sh
+./scripts/udgiv.py --toer      # viser spilversion og metadata, uploader intet
+./scripts/udgiv.py             # uploader som «release»
+```
+
+Scriptet skal bruge projektets id (`## X-Curse-Project-ID:` i toc-filen eller
+`--projekt <id>`) og et API-token fra authors.curseforge.com → API Tokens.
+Tokenet ligger i `~/.config/d2map/curseforge.env` som
+`CURSEFORGE_API_TOKEN=…` (chmod 600) – aldrig i repoet. API'et kan ikke oprette
+selve projektet. Scriptet er ikke prøvet mod CurseForge endnu; de korte navne
+på afhængighederne (`questie`, `factoruide-guide`) er et gæt og rettes i
+`VALGFRIE`, hvis CurseForge afviser dem.
+
 Nye projekter bliver gennemset af CurseForge, før de bliver synlige.
 
 Når projektet har fået et id, kan det skrives i `D2Map/D2Map.toc` som
