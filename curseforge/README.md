@@ -1,9 +1,13 @@
 # CurseForge
 
 Projektet har id **1798915** (https://authors.curseforge.com/#/projects/1798915/files),
-oprettet af Lars 2026-11-11. Første fil, D2Map 1.5.1, blev uploadet samme dag
-med `scripts/udgiv.py` (CurseForges fil-id 9562101). Felterne herunder er dem,
-projektet blev oprettet med.
+oprettet af Lars 2026-11-11. Felterne herunder er dem, projektet blev oprettet
+med. Uploadet med `scripts/udgiv.py`:
+
+| Version | Dato | CurseForges fil-id |
+|---|---|---|
+| 1.5.1 | 2026-11-11 | 9562101 |
+| 1.5.2 | 2026-11-11 | 9562470 |
 
 | Felt | Værdi |
 |---|---|
