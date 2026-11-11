@@ -17,10 +17,11 @@ fi
 zip="$rod/dist/D2Map-$version.zip"
 mkdir -p "$rod/dist"
 rm -f "$zip"
-# Licensen skal med i pakken; den ligger i roden og kopieres ind midlertidigt.
+# Licens og noter skal med i pakken; de ligger i roden og kopieres ind midlertidigt.
 cp "$rod/LICENSE" "$rod/D2Map/LICENSE.txt"
+cp "$rod/NOTICE.md" "$rod/D2Map/NOTICE.md"
 (cd "$rod" && zip -r -q -X "$zip" D2Map -x "*.DS_Store")
-rm -f "$rod/D2Map/LICENSE.txt"
+rm -f "$rod/D2Map/LICENSE.txt" "$rod/D2Map/NOTICE.md"
 
 echo "Skrev $zip"
 unzip -l "$zip"
