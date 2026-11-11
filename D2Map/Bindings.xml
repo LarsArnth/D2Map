@@ -1,0 +1,15 @@
+<!-- Tastaturgenveje: spillets Key Bindings > D2Map.
+     Navnene i menuen sættes i D2Map.lua (BINDING_NAME_D2MAP_…).
+     Ingen tast er valgt på forhånd her; D2Map.lua lægger Alt+M på
+     D2MAP_TOGGLE første gang, hvis tasten er ledig. -->
+<Bindings>
+    <Binding name="D2MAP_TOGGLE" category="D2Map">
+        D2Map_Toggle()
+    </Binding>
+    <Binding name="D2MAP_ZOOMIN" category="D2Map">
+        D2Map_Zoom(1)
+    </Binding>
+    <Binding name="D2MAP_ZOOMOUT" category="D2Map">
+        D2Map_Zoom(-1)
+    </Binding>
+</Bindings>

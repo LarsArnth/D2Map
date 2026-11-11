@@ -1,0 +1,17 @@
+## Interface: 16001
+## Title: |cffc8a04bD2|rMap
+## Notes: Diablo II-style automap: a click-through, see-through terrain map in the middle of the screen with Questie's quest pins. /d2map
+## Author: Lars Arnth
+## Version: 1.0.0
+## Category: Map
+## X-Category: Map
+## IconTexture: Interface\Icons\INV_Misc_Map_01
+## OptionalDeps: Questie
+## SavedVariablesPerCharacter: D2MapDB
+## X-License: MIT (code); tile table from OpenMap (MIT); map art is Blizzard's
+
+# Spillets minimap-fliser som fil-id'er (genereret, se scripts/byg-fliser.lua)
+Data\MinimapTiles.lua
+
+# Selve addon'en. Bindings.xml indlæses af spillet selv og skal ikke stå her.
+D2Map.lua
