@@ -1,0 +1,35 @@
+MIT License
+
+Copyright (c) 2026 Lars Arnth
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+--------------------------------------------------------------------------------
+
+This licence covers D2Map's own code, tools and textures.
+
+D2Map/Data/MinimapTiles.lua is generated from OpenMap's tile table
+(https://github.com/openmap-world/openmap), which is MIT licensed, Copyright (c)
+2026 OpenMap contributors. Its licence notice is reproduced at the top of that
+file.
+
+The minimap tiles the addon displays are Blizzard Entertainment's own art. They
+are loaded from the game client and are not included here. World of Warcraft is
+a trademark of Blizzard Entertainment, Inc. D2Map is not affiliated with or
+endorsed by Blizzard Entertainment.
