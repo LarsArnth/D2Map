@@ -51,6 +51,8 @@ function Widget:EnableMouse(til) self.mus = til end
 function Widget:SetSize(b, h) self.bredde, self.hoejde = b, h end
 function Widget:SetPoint(punkt, rel, relPunkt, x, y) self.punkter[punkt] = { rel = rel, relPunkt = relPunkt, x = x, y = y } end
 function Widget:GetCenter() return 800, 450 end
+function Widget:GetHeight() return self.hoejde or 768 end      -- UIParent: 768 enheder høj
+function Widget:SetScale(skala) self.skala = skala end
 function Widget:Show()
     local var = self.synlig
     self.synlig = true
@@ -544,6 +546,9 @@ felt.route:Klik()
 tjek("afkrydsning slår formerne fra", D2MapDB.route == false)
 felt.route:Klik()
 tjek("…og til igen", D2MapDB.route == true)
+felt.routeFocus:Klik()
+tjek("afkrydsning slår «kun guidens trin» fra", D2MapDB.routeFocus == false)
+felt.routeFocus:Klik()
 felt.pullRange:SetValue(27)
 tjek("pull-skyderen går i trin på 5", D2MapDB.pullRange == 25 or D2MapDB.pullRange == 30, D2MapDB.pullRange)
 felt.pullRange:SetValue(40)
@@ -620,7 +625,7 @@ D2Map.RegisterAdapter("Proeve", {
     IsAvailable = function() return true end,
     Collect = function(out)
         for i, m in ipairs(maal) do
-            D2Map.EmitPin(out, i, 0, udgangsNord + m[1], udgangsVest - m[2], "proeve.blp", 1, 1, 1, "objective", 600 + i)
+            D2Map.EmitPin(out, i, 0, udgangsNord + m[1], udgangsVest - m[2], "proeve.blp", 1, 1, 1, "objective", m[3] or 600 + i)
         end
         return #maal
     end,
@@ -894,6 +899,59 @@ saetWaypoint(nil)
 vej = function(n, w) return { { n, w }, { udgangsNord + 100, udgangsVest } } end
 kor(0.3)
 
+print("Pull-ruter kun for guidens aktuelle trin")
+vej = nil
+-- To store lejre med hver sin quest: ring A (quest 700) mod nordøst, ring B (quest 800) mod sydvest.
+local function lejr(midtNord, midtOest, quest)
+    local liste = {}
+    for i = 1, 8 do
+        local v = i / 8 * 2 * math.pi
+        liste[i] = { midtNord + math.sin(v) * 70, midtOest + math.cos(v) * 70, quest }
+    end
+    return liste
+end
+local lejrA, lejrB = lejr(110, 110, 700), lejr(-110, -110, 800)
+saet(lejrA, lejrB)
+tjek("uden guide: en rute om hver lejr", #former() == 2, #former())
+tjek("standard: ruterne følger guidens trin", D2MapDB.routeFocus == true)
+-- En attrap af Factoruides guide: trin 3 og 4 er «NOW»; trin 3 hører til quest 700.
+local nuvaerende, guideRute = { 3, 4 }, { steps = { [3] = { q = 700, k = "objective", n = "Brute" }, [4] = { q = 700, k = "objective", n = "Witch Doctor" },
+    [5] = { q = 800, k = "objective" }, [6] = { k = "fly" } } }
+Factoruide.Guide = {
+    CurrentSteps = function() return nuvaerende end,
+    Route = function() return guideRute end,
+}
+kor(1.2)
+local f = former()
+tjek("med guide: kun en rute om det aktuelle trins quest", #f == 1 and kanPulles(lejrA, 1, 40) and select(2, naermeste(lejrB[1])) > 100,
+    #f)
+slash("status")
+tjek("status fortæller om begrænsningen", (chat[#chat - 1] .. chat[#chat]):find("limited to the 1 quest", 1, true) ~= nil, chat[#chat - 1])
+nuvaerende = { 5 }                                     -- guiden går videre til quest 800
+kor(1.2)
+f = former()
+tjek("skifter guiden trin, flytter ruten med", #f == 1 and kanPulles(lejrB, 1, 40) and select(2, naermeste(lejrA[1])) > 100, #f)
+nuvaerende = { 3, 5 }
+kor(1.2)
+tjek("to quests i samme trin: en rute om hver", #former() == 2, #former())
+nuvaerende = { 6 }                                     -- et rejse-trin uden quest
+kor(1.2)
+tjek("et trin uden quest: ingen ruter", #linjer() == 0, #linjer())
+slash("focus off")
+kor(1.2)
+tjek("/d2map focus off: ruter om alle quests igen", #former() == 2 and D2MapDB.routeFocus == false, #former())
+slash("focus on")
+guidenSkjult = true
+kor(1.2)
+tjek("er guiden skjult, begrænser den ikke ruterne", #former() == 2, #former())
+guidenSkjult = false
+Factoruide.Guide.CurrentSteps = function() error("guiden fejler") end
+kor(1.2)
+tjek("fejler guiden, tegnes ruter om alle quests", #former() == 2, #former())
+Factoruide.Guide = nil
+vej = function(n, w) return { { n, w }, { udgangsNord + 100, udgangsVest } } end
+kor(1.2)
+
 print("Rotation efter figurens retning")
 maal = { { 0, -50 }, { 80, 0 } }                       -- ét mål 50 yards mod vest, ét 80 mod nord
 spiller.retning = math.pi / 2                          -- figuren ser mod vest
@@ -964,7 +1022,7 @@ slash("reset")
 tjek("/d2map reset", D2MapDB.opacity == 0 and D2MapDB.span == 650 and D2MapDB.bindingOffered == true
     and D2MapDB.terrain == false and D2MapDB.route == true and D2MapDB.rotate == true and D2MapDB.waypoint == true
     and D2MapDB.moveFade == true and D2MapDB.moveOpacity == 54 and D2MapDB.combatFade == false
-    and D2MapDB.pullRange == 40 and D2MapDB.edgePins == false)
+    and D2MapDB.pullRange == 40 and D2MapDB.edgePins == false and D2MapDB.routeFocus == true)
 -- Med standarderne: usynlig når man står stille, synlig når man går.
 kor(1)
 tjek("standard: usynligt, når man står stille", taet(canvas.alfa, 0) and taet(pinLayer.alfa, 0), canvas.alfa)

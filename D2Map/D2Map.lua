@@ -57,6 +57,7 @@ local DEFAULTS = {
                                -- nærmeste pin for hver quest, og guidens mål
     route          = true,     -- tegn en pull-rute gennem hver klynge af quest-mål
     pullRange      = 40,       -- yards: så langt fra de yderste mål må ruten ligge (0 = gennem dem)
+    routeFocus     = true,     -- kun ruter om de quests, guidens aktuelle trin handler om
     rotate         = true,     -- drej kortet, så det, figuren ser mod, er opad (ellers nord opad)
     waypoint       = true,     -- vis guidens vej (fx Factoruides grønne prikkede streg)
     source         = "auto",   -- auto | questie | blizzard (hvilken adapter)
@@ -1122,6 +1123,45 @@ local function PullLoop(hull, members)
     return xs, ys
 end
 
+-- De quests, guidens aktuelle trin handler om (Factoruides «NOW»), som et sæt
+-- questID → true. nil betyder «ingen begrænsning»: indstillingen er slået fra,
+-- Factoruide er ikke indlæst, guiden er skjult, eller der er ingen rute i brug.
+-- Et tomt sæt betyder, at det aktuelle trin ikke har nogen quest (fx en rejse):
+-- så er der intet at pulle, og der tegnes ingen ruter.
+--
+-- Factoruide.Guide:CurrentSteps() giver de trin, der vises sammen som det
+-- aktuelle, som numre i ruten; Guide:Route().steps[nummer].q er trinets quest.
+local focusQuests, focusCount = {}, 0
+
+local function GuideQuests()
+    focusCount = 0
+    local addon = Factoruide
+    if not db.routeFocus or type(addon) ~= "table" then return nil end
+    local guide = addon.Guide
+    if type(guide) ~= "table" or type(guide.CurrentSteps) ~= "function" or type(guide.Route) ~= "function" then
+        return nil
+    end
+    if type(addon.Get) == "function" then
+        local okShown, shown = pcall(addon.Get, addon, "uiShown")
+        if okShown and shown == false then return nil end
+    end
+    local okSteps, steps = pcall(guide.CurrentSteps, guide)
+    local okRoute, route = pcall(guide.Route, guide)
+    if not (okSteps and okRoute) or type(steps) ~= "table" or type(route) ~= "table"
+        or type(route.steps) ~= "table" then
+        return nil
+    end
+    wipe(focusQuests)
+    for _, index in ipairs(steps) do
+        local step = route.steps[index]
+        if type(step) == "table" and IsNumber(step.q) and not focusQuests[step.q] then
+            focusQuests[step.q] = true
+            focusCount = focusCount + 1
+        end
+    end
+    return focusQuests
+end
+
 -- Regner formerne ud, hvis der er grund til det. Kaldes, når pins er hentet
 -- (ca. én gang i sekundet), men gør for det meste ingenting.
 function BuildLoops(continent, north, west)
@@ -1130,11 +1170,15 @@ function BuildLoops(continent, north, west)
         return
     end
 
-    -- Et fingeraftryk af alle mål på kontinentet (hele tal, så rækkefølgen er ligegyldig).
-    local signature = continent
+    -- Kun mål for guidens aktuelle quests, når der er en guide at følge.
+    local only = GuideQuests()
+
+    -- Et fingeraftryk af de mål, der regnes med (hele tal, så rækkefølgen er
+    -- ligegyldig). Skifter guiden trin, ændrer det sig, og ruterne regnes om.
+    local signature = continent + (only and 500000 or 0)
     for i = 1, recordCount do
         local rec = records[i]
-        if rec.continent == continent and rec.kind == "objective" then
+        if rec.continent == continent and rec.kind == "objective" and (not only or only[rec.quest]) then
             signature = signature + 1000003 + floor(rec.north * 4 + 0.5) * 3 + floor(rec.west * 4 + 0.5)
         end
     end
@@ -1153,7 +1197,7 @@ function BuildLoops(continent, north, west)
     local found = 0
     for i = 1, recordCount do
         local rec = records[i]
-        if rec.continent == continent and rec.kind == "objective" then
+        if rec.continent == continent and rec.kind == "objective" and (not only or only[rec.quest]) then
             local dn, dw = rec.north - north, rec.west - west
             local dist = dn * dn + dw * dw
             if dist <= radius * radius then
@@ -1307,8 +1351,10 @@ function UpdateLoops(north, west)
 end
 
 -- Til /d2map status: antal former, lænkeafstanden og antal linjestykker tegnet.
+-- Fjerde værdi: hvor mange quests guidens aktuelle trin begrænser ruterne til
+-- (nil = ingen begrænsning).
 function LoopStatus()
-    return loopCount, loopLink, loopLinesShown
+    return loopCount, loopLink, loopLinesShown, GuideQuests() and focusCount or nil
 end
 
 end -- afsnit 8
@@ -1839,6 +1885,7 @@ local AFTER = {
     waypoint = function() RefetchPath() Redraw() end,
     route    = Resync,
     pullRange = Resync,
+    routeFocus = Resync,
     pins     = Resync,
     source   = Resync,
 }
@@ -2046,6 +2093,7 @@ local function CreateOptions()
     byKey.pullRange = MakeSlider(frame, Row(40), "pullRange", LIMITS.pullRange[1], LIMITS.pullRange[2], 5, function(v)
         return ("Pull range: %d yards from the outermost targets"):format(v)
     end)
+    byKey.routeFocus = MakeCheck(frame, Row(26), "Only for the guide's current step (Factoruide)", "routeFocus")
     byKey.waypoint = MakeCheck(frame, Row(30), "Show the path to the guide's next place or waypoint", "waypoint")
 
     byKey.terrain = MakeCheck(frame, Row(26), "Show terrain (minimap tiles)", "terrain")
@@ -2073,6 +2121,11 @@ local function CreateOptions()
     end }
 
     frame:SetSize(PANEL_WIDTH, -y + 12)
+    -- Vinduet er højt. Kan det ikke være på skærmen, skaleres det ned, så det kan.
+    local room = UIParent:GetHeight()
+    if IsNumber(room) and room > 100 and -y + 12 > room - 40 then
+        frame:SetScale((room - 40) / (-y + 12))
+    end
     frame.controls = byKey
     frame:SetScript("OnShow", RefreshOptions)
     frame:Hide()
@@ -2198,6 +2251,7 @@ local function PrintHelp()
         "/d2map rim <on|off> – out-of-range quest targets and the guide's goal as markers on the rim (now " .. OnOff(db.edgePins) .. ")",
         "/d2map route <on|off> – a pull route through each cluster of objectives (now " .. OnOff(db.route) .. ")",
         "/d2map pull <0-60> – how far the route may stay from the outermost targets, in yards (now " .. db.pullRange .. ")",
+        "/d2map focus <on|off> – pull routes only for the quests in the guide's current step (now " .. OnOff(db.routeFocus) .. ")",
         "/d2map rotate <on|off> – turn the map to the way you face (now " .. OnOff(db.rotate) .. ")",
         "/d2map waypoint <on|off> – dotted path from Factoruide, Shortest Path Forever or the game's waypoint (now " .. OnOff(db.waypoint) .. ")",
         "/d2map terrain <on|off> – minimap tiles (now " .. OnOff(db.terrain) .. ")",
@@ -2227,9 +2281,11 @@ local function PrintStatus()
     end
     Print(("pins: %s, source %s, %d known, %d drawn%s"):format(
         db.pins, activeAdapterName, recordCount, pinsShown, mask and "" or "; no mask support, using hard edges"))
-    local clusters, link, pieces = LoopStatus()
+    local clusters, link, pieces, focused = LoopStatus()
     Print(("pull routes: %s, %d clusters (objectives within %d yards belong together), pull range %d yards, %d line pieces drawn; map %s"):format(
         OnOff(db.route), clusters, link, db.pullRange, pieces, db.rotate and "rotates with you" or "north up"))
+    Print(focused and ("pull routes are limited to the %d quest(s) in the guide's current step"):format(focused)
+        or "pull routes cover every quest (no guide step to follow, or the limit is off)")
     Print(("guide path: %s, source %s, %.0f yards to go, %d dots drawn"):format(OnOff(db.waypoint), PathStatus()))
     if tickFailed then Print("the update loop is stopped after an error – /d2map toggle twice to retry.") end
 end
@@ -2330,6 +2386,7 @@ commands.terrain = function(rest) SetFlag("terrain", rest, "terrain") end
 commands.route = function(rest) SetFlag("route", rest, "pull routes") end
 commands.outlines = commands.route
 commands.pull = function(rest) SetNumber("pullRange", rest, "pull") end
+commands.focus = function(rest) SetFlag("routeFocus", rest, "routes only for the guide's current step") end
 commands.rotate = function(rest) SetFlag("rotate", rest, "rotate") end
 commands.waypoint = function(rest) SetFlag("waypoint", rest, "guide path") end
 commands.path = commands.waypoint

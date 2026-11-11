@@ -7,7 +7,7 @@ bevægelse og targeting går lige igennem.
 
 ```sh
 ./installer.sh        # kopierer D2Map/ ind i spillets AddOns-mappe
-lua test/koer.lua     # 178 tjek mod en attrap af WoW's API
+lua test/koer.lua     # 189 tjek mod en attrap af WoW's API
 lua test/tegn.lua     # tegner pull-ruterne for nogle prøvesæt til docs/former.svg
 ```
 
@@ -34,6 +34,7 @@ ajour:
 | `/d2map pinsize <0.5-3>` | Størrelse på pins |
 | `/d2map rim <on\|off>` | Det, der ligger uden for rammen, som mærker på kanten: nærmeste pin for hver quest og guidens mål (fra som standard) |
 | `/d2map route <on\|off>` | En pull-rute gennem hver klynge af quest-mål (til som standard) |
+| `/d2map focus <on\|off>` | Pull-ruter kun om de quests, Factoruides aktuelle trin handler om (til som standard; uden guide: alle quests) |
 | `/d2map pull <0-60>` | Pull-afstand i yards: så langt fra de yderste mål må ruten ligge (standard 40; 0 = gennem dem) |
 | `/d2map waypoint <on\|off>` | Grøn prikket streg til guidens næste sted: fra Factoruide, Shortest Path Forever eller spillets eget waypoint (til som standard) |
 | `/d2map rotate <on\|off>` | Drej kortet, så det, figuren ser mod, er opad (til som standard; fra = nord opad) |
@@ -131,6 +132,17 @@ En ny bruger ser altså ingenting, før figuren flytter sig.
   begge ender. Ruterne ligger fast i verden og regnes kun om, når målene, zoomet
   eller pull-afstanden ændrer sig, eller spilleren har flyttet sig en kvart
   ramme. Se `docs/former.png`; justér `LOOP_…` og kør `lua test/tegn.lua`.
+- **Kun guidens aktuelle trin** (1.7.0). Lars: «kun tegne en cirkel rundt om de
+  quests som står i current step fra Factoruide». `Factoruide.Guide:CurrentSteps()`
+  giver de trin, der vises som «NOW», som numre i ruten, og
+  `Guide:Route().steps[nummer].q` er trinets quest-id. `GuideQuests()` laver et
+  sæt af dem, og kun `objective`-pins fra de quests regnes med i klyngerne.
+  Sættet indgår i fingeraftrykket, så ruterne regnes om, når guiden skifter
+  trin. Uden Factoruide, med skjult guide eller uden rute i brug er der ingen
+  begrænsning; et trin uden quest (en rejse) giver ingen ruter. Pins berøres
+  ikke – kun ruterne. Trinets `o` (objective-nummer) bruges ikke: begge mobs i
+  Lars' eksempel hørte til samme quest, og Questies numre er ikke afprøvet mod
+  Factoruides.
 - **Guidens vej** (afsnit 9). `Factoruide.Pathing:Remaining(kontinent, nord,
   vest)` er den funktion, Factoruide selv tegner sin grønne prikkede streg ud
   fra (`Factoruide_Guide/PathLines.lua`): resten af vejen til guidens sted som
@@ -201,8 +213,9 @@ skiftes ud (ingen `C_Map`), og fliserne skal hentes med sti i stedet for fil-id.
 Lars' skærmbilleder og tilbagemeldinger 2026-11-11: terræn, bløde runde kanter,
 Questies pins og spillerens pil (1.0), indstillingsvinduet (1.1), klyngeformerne
 (1.3), guidens vej (1.4) og den lyse grønne prik (1.5.1) virker. Ikke set i
-spillet endnu: pull-ruterne og det samlede flueben for kanten (1.6.0), og
-stregen til Shortest Path Forevers næste knæk (1.6.1) – især
+spillet endnu: det samlede flueben for kanten (1.6.0), stregen til Shortest
+Path Forevers næste knæk (1.6.1) og begrænsningen til guidens aktuelle trin
+(1.7.0). Pull-ruterne (1.6.0) er set i spillet, men ikke gennemprøvet – især
 klyngernes lænkeafstand er et gæt, indtil den er set mod flere af Questies
 rigtige pins – og det er ikke afklaret, om `UnitPosition` er hemmelig i combat
 (så er automappet tomt i combat).

@@ -1,0 +1,3 @@
+- With Factoruide, pull routes are now drawn only for the quests in the guide's current step, so the map shows what to pull *now*. Turn it off under `/d2map` ("Only for the guide's current step") to get routes for every quest again. Without Factoruide nothing changes.
+- The dotted path also works with **Shortest Path Forever** (to the next turn of its journey) and with the game's own waypoint.
+- The options window scales down if it does not fit on the screen.
