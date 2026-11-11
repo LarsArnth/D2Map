@@ -1,7 +1,9 @@
 # CurseForge
 
-Det, der skal bruges for at oprette og opdatere projektet på CurseForge
-(forfatter-portalen: https://authors.curseforge.com).
+Projektet har id **1798915** (https://authors.curseforge.com/#/projects/1798915/files),
+oprettet af Lars 2026-11-11. Første fil, D2Map 1.5.1, blev uploadet samme dag
+med `scripts/udgiv.py` (CurseForges fil-id 9562101). Felterne herunder er dem,
+projektet blev oprettet med.
 
 | Felt | Værdi |
 |---|---|
@@ -18,7 +20,7 @@ Det, der skal bruges for at oprette og opdatere projektet på CurseForge
 
 Fil til upload: `dist/D2Map-<version>.zip` fra `./scripts/pak.sh`. Vælg
 spilversionen for **WoW: Forever** (interface 16001), og «Release».
-Valgfrie afhængigheder: Questie og Factoruide Guide.
+Valgfri afhængighed: Questie.
 
 ## Upload med script
 
@@ -34,11 +36,11 @@ Scriptet skal bruge projektets id (`## X-Curse-Project-ID:` i toc-filen eller
 `--projekt <id>`) og et API-token fra authors.curseforge.com → API Tokens.
 Tokenet ligger i `~/.config/d2map/curseforge.env` som
 `CURSEFORGE_API_TOKEN=…` (chmod 600) – aldrig i repoet. API'et kan ikke oprette
-selve projektet. Scriptet er ikke prøvet mod CurseForge endnu; de korte navne
-på afhængighederne (`questie`, `factoruide-guide`) er et gæt og rettes i
-`VALGFRIE`, hvis CurseForge afviser dem.
+selve projektet. Valgfri afhængighed: `questie` (listen `VALGFRIE` i
+scriptet). Factoruide ligger ikke på CurseForge og kan derfor ikke angives.
 
-Nye projekter bliver gennemset af CurseForge, før de bliver synlige.
-
-Når projektet har fået et id, kan det skrives i `D2Map/D2Map.toc` som
-`## X-Curse-Project-ID: <id>`, så CurseForge-appen genkender addon'en.
+Nye projekter og filer bliver gennemset af CurseForge, før de bliver synlige.
+Id'et står i `D2Map/D2Map.toc` (`## X-Curse-Project-ID`), så CurseForge-appen
+genkender addon'en. Ændringsloggen til hver version ligger her som
+`aendringer-<version>.md` og gives til scriptet med
+`--aendringer "$(cat curseforge/aendringer-<version>.md)"`.

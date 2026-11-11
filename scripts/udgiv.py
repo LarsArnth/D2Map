@@ -34,8 +34,9 @@ ROD = pathlib.Path(__file__).resolve().parent.parent
 TOC = ROD / "D2Map" / "D2Map.toc"
 TOKENFIL = pathlib.Path.home() / ".config" / "d2map" / "curseforge.env"
 API = "https://wow.curseforge.com/api"
-# Addons, D2Map kan bruge, men ikke kræver (CurseForges korte navne).
-VALGFRIE = ["questie", "factoruide-guide"]
+# Addons, D2Map kan bruge, men ikke kræver (CurseForges korte navne). Factoruide
+# er ikke med: dens toc-fil har intet CurseForge-id, så den ligger ikke dér.
+VALGFRIE = ["questie"]
 
 
 def toc_felt(navn: str) -> str | None:
