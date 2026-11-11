@@ -33,25 +33,29 @@ local ADDON, ns = ...
 --------------------------------------------------------------------------------
 
 -- Alt herunder gemmes pr. figur i D2MapDB (SavedVariablesPerCharacter).
+--
+-- Standarderne er Lars' egne (2026-11-11): automappet er usynligt, når man står
+-- stille (opacity 0), og kommer frem, når man bevæger sig (54 %). Det drejer
+-- med figuren, og der tones ikke særskilt ned i combat.
 local DEFAULTS = {
     enabled        = true,     -- er automappet slået til?
-    opacity        = 40,       -- gennemsigtighed uden for combat, i procent
-    combatOpacity  = 18,       -- gennemsigtighed i combat, i procent
-    combatFade     = true,     -- skal det tones ned i combat?
-    moveOpacity    = 20,       -- gennemsigtighed, mens figuren bevæger sig, i procent
-    moveFade       = false,    -- skal den bruges? (fra: samme som når man står stille)
+    opacity        = 0,        -- gennemsigtighed, når man står stille, i procent
+    combatOpacity  = 21,       -- gennemsigtighed i combat, i procent
+    combatFade     = false,    -- skal det tones ned i combat?
+    moveOpacity    = 54,       -- gennemsigtighed, mens figuren bevæger sig, i procent
+    moveFade       = true,     -- skal den bruges? (fra: samme som når man står stille)
     fadeTime       = 0.35,     -- sekunder en toning varer
     size           = 560,      -- rammens bredde og højde i UI-enheder
-    span           = 500,      -- hvor mange yards rammen dækker fra kant til kant
+    span           = 650,      -- hvor mange yards rammen dækker fra kant til kant
     shape          = "round",  -- round | square | plain (plain = ingen maske)
-    style          = "color",  -- color | sepia | ghost
+    style          = "sepia",  -- color | sepia | ghost (ses kun med terræn slået til)
     terrain        = false,    -- vis minimap-fliserne (fra: kun pins og pilen)
     pins           = "all",    -- all | objectives | off
     pinScale       = 1.0,      -- størrelsesfaktor for pins
     pinBoost       = 2.0,      -- pins er så mange gange mere synlige end terrænet
     edgePins       = true,     -- vis nærmeste pin for hver quest på kanten, når den er uden for
     route          = true,     -- tegn en blød form om hver klynge af quest-mål
-    rotate         = false,    -- drej kortet, så det, figuren ser mod, er opad (ellers nord opad)
+    rotate         = true,     -- drej kortet, så det, figuren ser mod, er opad (ellers nord opad)
     waypoint       = true,     -- vis guidens vej (fx Factoruides grønne prikkede streg)
     source         = "auto",   -- auto | questie | blizzard (hvilken adapter)
     strata         = "LOW",    -- frame strata: under de fleste UI-elementer

@@ -7,7 +7,7 @@ bevægelse og targeting går lige igennem.
 
 ```sh
 ./installer.sh        # kopierer D2Map/ ind i spillets AddOns-mappe
-lua test/koer.lua     # 151 tjek mod en attrap af WoW's API
+lua test/koer.lua     # 155 tjek mod en attrap af WoW's API
 lua test/tegn.lua     # tegner formerne for nogle prøvesæt til docs/former.svg
 ```
 
@@ -23,10 +23,10 @@ ajour:
 | Kommando | Hvad |
 |---|---|
 | `/d2map toggle` | Vis eller skjul (også `on` / `off`) |
-| `/d2map opacity <0-100>` | Gennemsigtighed uden for combat (standard 40) |
-| `/d2map combat <0-100\|on\|off>` | Gennemsigtighed i combat (standard 18), eller slå toningen fra |
-| `/d2map moving <0-100\|on\|off>` | Gennemsigtighed, mens figuren bevæger sig (fra som standard; et tal slår den til) |
-| `/d2map zoom <yards\|in\|out>` | Hvor mange yards rammen dækker (standard 500) |
+| `/d2map opacity <0-100>` | Gennemsigtighed, når man står stille (standard 0: usynligt) |
+| `/d2map combat <0-100\|on\|off>` | Gennemsigtighed i combat (standard 21, men toningen er slået fra) |
+| `/d2map moving <0-100\|on\|off>` | Gennemsigtighed, mens figuren bevæger sig (standard 54, slået til) |
+| `/d2map zoom <yards\|in\|out>` | Hvor mange yards rammen dækker (standard 650) |
 | `/d2map size <pixels>` | Rammens størrelse (standard 560) |
 | `/d2map shape <round\|square\|plain>` | Bløde kanter som cirkel eller firkant; `plain` = ingen maske |
 | `/d2map style <color\|sepia\|ghost>` | `ghost` lægger terrænet additivt ovenpå, mest som i Diablo II |
@@ -35,7 +35,7 @@ ajour:
 | `/d2map edge <on\|off>` | Nærmeste pin for hver quest vises på kanten, når den ligger uden for |
 | `/d2map outlines <on\|off>` | En blød form om hver klynge af quest-mål (til som standard; `route` er det gamle navn og virker også) |
 | `/d2map waypoint <on\|off>` | Guidens vej: Factoruides grønne prikkede streg til næste sted (til som standard) |
-| `/d2map rotate <on\|off>` | Drej kortet, så det, figuren ser mod, er opad (fra som standard: nord opad) |
+| `/d2map rotate <on\|off>` | Drej kortet, så det, figuren ser mod, er opad (til som standard; fra = nord opad) |
 | `/d2map terrain <on\|off>` | Minimap-fliserne (**fra som standard**: kun pins og pilen) |
 | `/d2map source <auto\|questie\|blizzard>` | Hvor pins kommer fra |
 | `/d2map bind [tast]` | Læg en tast på toggle (Alt+M, hvis ingen nævnes) |
@@ -49,6 +49,11 @@ fra eller slettet. Er den optaget af noget, der findes, siger addon'en det, og
 `/d2map bind` overtager den.
 
 Indstillingerne gemmes pr. figur i `D2MapDB`.
+
+**Standarderne er Lars' egne** (skærmbillede 2026-11-11, version 1.5.2):
+automappet er usynligt, når man står stille, og kommer frem med 54 %, når man
+bevæger sig; 650 yards, drejer med figuren, ingen særskilt toning i combat.
+En ny bruger ser altså ingenting, før figuren flytter sig.
 
 ## Filer
 

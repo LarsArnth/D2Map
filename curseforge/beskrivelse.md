@@ -2,7 +2,7 @@
 
 A Diablo II-style automap for **WoW: Forever**: a see-through map in the middle of your screen that shows where your quest targets are, without ever getting in the way. It never takes mouse input, so camera, movement and targeting go straight through it.
 
-Type `/d2map` to open the options window.
+Out of the box the map is hidden while you stand still and fades in when you move. Type `/d2map` to open the options window and change that.
 
 ## What it shows
 
@@ -10,12 +10,12 @@ Type `/d2map` to open the options window.
 - **Cluster outlines**: a soft shape around each group of quest objectives, so you can see the area to work through instead of chasing single dots.
 - **The guide path** from Factoruide as a bright dotted line to the guide's next place, with a marker on the rim when it is off the map.
 - **Terrain** (optional, off by default): the game's own minimap tiles, with soft round or square edges and three looks (colour, sepia, ghost).
-- **Your character** as an arrow in the middle. The map is north up, or turns with the way you face.
+- **Your character** as an arrow in the middle. The map turns with the way you face, or stays north up.
 
 ## Staying out of the way
 
 - Click-through at all times. Unlock it in the options to drag it somewhere else or zoom with the mouse wheel.
-- Three opacity levels: standing still, moving, and in combat. It fades down when a fight starts and back up when it ends.
+- Three opacity levels: standing still, moving, and in combat. By default it is invisible when you stand still and shows while you move; a separate combat level is there if you want it.
 - Hidden costs nothing: the update loop only runs while the map is shown.
 
 ## Options and commands

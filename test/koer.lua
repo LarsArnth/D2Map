@@ -215,10 +215,24 @@ print("Opstart")
 fyr("ADDON_LOADED", "EnAndenAddon")
 tjek("andre addons' ADDON_LOADED rører ikke indstillingerne", D2MapDB == nil)
 fyr("ADDON_LOADED", "D2Map")
-tjek("defaults fyldes ud", D2MapDB.opacity == 40 and D2MapDB.combatOpacity == 18 and D2MapDB.enabled == true)
+tjek("defaults fyldes ud", D2MapDB.opacity == 0 and D2MapDB.combatOpacity == 21 and D2MapDB.enabled == true)
+tjek("standard: synlig i bevægelse (54 %), ingen combat-toning", D2MapDB.moveFade == true and D2MapDB.moveOpacity == 54
+    and D2MapDB.combatFade == false)
+tjek("standard: 650 yards, drejer med figuren, sepia", D2MapDB.span == 650 and D2MapDB.rotate == true and D2MapDB.style == "sepia")
 tjek("terræn er slået fra som standard", D2MapDB.terrain == false)
 fyr("PLAYER_LOGIN")
 fyr("PLAYER_ENTERING_WORLD")
+
+-- Resten af testen regner på et fast grundlag (40 % synlig, 500 yards, nord opad,
+-- combat-toning til, bevægelse fra) i stedet for standarderne, så tallene i
+-- tjekkene ikke skal skrives om, hver gang en standard ændres.
+local function grundlag()
+    for _, kommando in ipairs({ "opacity 40", "combat 18", "combat on", "moving 20", "moving off",
+        "zoom 500", "rotate off", "style color" }) do
+        SlashCmdList.D2MAP(kommando)
+    end
+end
+grundlag()
 
 local root = D2MapFrame
 local canvas, pinLayer, mover
@@ -396,7 +410,7 @@ local function gaa(sekunder)
     return start
 end
 local hjem = gaa(1)
-tjek("fra som standard: bevægelse ændrer ikke gennemsigtigheden", taet(canvas.alfa, 0.40), canvas.alfa)
+tjek("slået fra: bevægelse ændrer ikke gennemsigtigheden", taet(canvas.alfa, 0.40), canvas.alfa)
 slash("moving 20")
 tjek("/d2map moving 20 sætter værdien og slår den til", D2MapDB.moveOpacity == 20 and D2MapDB.moveFade == true)
 kor(1)
@@ -544,8 +558,10 @@ tjek("/d2map igen lukker vinduet", vindue.synlig == false)
 slash("options")
 tjek("/d2map options åbner det også", vindue.synlig == true)
 slash("reset")
-tjek("Reset sætter felterne tilbage", felt.opacity.vaerdi == 40 and felt.shape.buttons[1].afkrydset == true
-    and felt.terrain.afkrydset == false)
+tjek("Reset sætter felterne tilbage til standarderne", felt.opacity.vaerdi == 0 and felt.shape.buttons[1].afkrydset == true
+    and felt.terrain.afkrydset == false and felt.rotate.afkrydset == true and felt.moveOpacity.vaerdi == 54
+    and felt.style.buttons[2].afkrydset == true)
+grundlag()
 slash("terrain on")
 slash("")
 
@@ -822,9 +838,17 @@ tjek("/d2map bind ctrl-n", bindinger["CTRL-N"] == "D2MAP_TOGGLE")
 
 print("Nulstilling og gemte indstillinger")
 slash("reset")
-tjek("/d2map reset", D2MapDB.opacity == 40 and D2MapDB.span == 500 and D2MapDB.bindingOffered == true
-    and D2MapDB.terrain == false and D2MapDB.route == true and D2MapDB.rotate == false and D2MapDB.waypoint == true
-    and D2MapDB.moveFade == false and D2MapDB.moveOpacity == 20)
+tjek("/d2map reset", D2MapDB.opacity == 0 and D2MapDB.span == 650 and D2MapDB.bindingOffered == true
+    and D2MapDB.terrain == false and D2MapDB.route == true and D2MapDB.rotate == true and D2MapDB.waypoint == true
+    and D2MapDB.moveFade == true and D2MapDB.moveOpacity == 54 and D2MapDB.combatFade == false)
+-- Med standarderne: usynlig når man står stille, synlig når man går.
+kor(1)
+tjek("standard: usynligt, når man står stille", taet(canvas.alfa, 0) and taet(pinLayer.alfa, 0), canvas.alfa)
+for _ = 1, 50 do
+    spiller.nord = spiller.nord + 0.14
+    root.scripts.OnUpdate(root, 0.02)
+end
+tjek("standard: 54 % i bevægelse, pins fuldt synlige", taet(canvas.alfa, 0.54) and taet(pinLayer.alfa, 1), canvas.alfa)
 -- En ødelagt SavedVariables-fil: indlæs addon'en forfra og se, at den retter op.
 D2MapDB.opacity = "vrøvl"
 D2MapDB.size = 99999
@@ -834,7 +858,7 @@ D2MapDB.terrain = true
 D2MapDB.settingsVersion = nil                          -- gemt af den første udgave
 assert(loadfile("D2Map/D2Map.lua"))("D2Map", ns)
 rammer[#rammer].scripts.OnEvent(rammer[#rammer], "ADDON_LOADED", "D2Map")
-tjek("forkerte gemte værdier rettes ved indlæsning", D2MapDB.opacity == 40 and D2MapDB.size == 1400
+tjek("forkerte gemte værdier rettes ved indlæsning", D2MapDB.opacity == 0 and D2MapDB.size == 1400
     and D2MapDB.shape == "round" and D2MapDB.span == 433)
 tjek("den første udgaves gemte «terræn til» slås fra én gang", D2MapDB.terrain == false and D2MapDB.settingsVersion == 2)
 D2MapDB.terrain = true                                 -- slået til igen af brugeren
