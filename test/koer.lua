@@ -384,8 +384,43 @@ fyr("PLAYER_REGEN_ENABLED")
 kor(1)
 tjek("efter combat: tilbage på 40 %", taet(canvas.alfa, 0.40), canvas.alfa)
 
-print("Slash-kommandoer")
+print("Gennemsigtighed i bevægelse")
 local slash = SlashCmdList.D2MAP
+-- Går sekunder mod nord i løbetempo (7 yards i sekundet) og tilbage til udgangspunktet bagefter.
+local function gaa(sekunder)
+    local skridt, start = 0.02, spiller.nord
+    for _ = 1, math.floor(sekunder / skridt + 0.5) do
+        spiller.nord = spiller.nord + 7 * skridt
+        root.scripts.OnUpdate(root, skridt)
+    end
+    return start
+end
+local hjem = gaa(1)
+tjek("fra som standard: bevægelse ændrer ikke gennemsigtigheden", taet(canvas.alfa, 0.40), canvas.alfa)
+slash("moving 20")
+tjek("/d2map moving 20 sætter værdien og slår den til", D2MapDB.moveOpacity == 20 and D2MapDB.moveFade == true)
+kor(1)
+tjek("står man stille, gælder den normale gennemsigtighed", taet(canvas.alfa, 0.40), canvas.alfa)
+gaa(1)
+tjek("i bevægelse: 20 %", taet(canvas.alfa, 0.20) and taet(pinLayer.alfa, 0.40), canvas.alfa)
+kor(0.2)
+tjek("et kort stop tæller stadig som bevægelse (intet blink)", taet(canvas.alfa, 0.20), canvas.alfa)
+kor(1.2)
+tjek("efter stoppet: tilbage på 40 %", taet(canvas.alfa, 0.40), canvas.alfa)
+slash("moving 80")
+gaa(1)
+tjek("den må gerne være højere end normalt (mere synlig, mens man løber)", taet(canvas.alfa, 0.80), canvas.alfa)
+fyr("PLAYER_REGEN_DISABLED")
+gaa(1)
+tjek("i combat vinder combat-værdien, også i bevægelse", taet(canvas.alfa, 0.18), canvas.alfa)
+fyr("PLAYER_REGEN_ENABLED")
+slash("moving off")
+gaa(1)
+tjek("/d2map moving off", D2MapDB.moveFade == false and taet(canvas.alfa, 0.40), canvas.alfa)
+spiller.nord = hjem
+kor(0.6)
+
+print("Slash-kommandoer")
 tjek("/d2map er registreret", SLASH_D2MAP1 == "/d2map" and type(slash) == "function")
 slash("opacity 55")
 kor(1)
@@ -457,6 +492,11 @@ tjek("teksten ved et afkrydsningsfelt kan også klikkes", vindue.controls.terrai
 local felt = vindue.controls
 tjek("felterne viser de gemte værdier", felt.enabled.afkrydset == true and felt.opacity.vaerdi == 40
     and felt.span.vaerdi == 500 and felt.terrain.afkrydset == true and felt.locked.afkrydset == false)
+tjek("feltet og skyderen for bevægelse findes", felt.moveFade.afkrydset == false and felt.moveOpacity.vaerdi == 80)
+felt.moveOpacity:SetValue(30)
+tjek("at trække i skyderen slår den til", D2MapDB.moveOpacity == 30 and D2MapDB.moveFade == true and felt.moveFade.afkrydset == true)
+felt.moveFade:Klik()
+tjek("afkrydsningen slår den fra igen", D2MapDB.moveFade == false)
 tjek("valget for pins står på All", felt.pins.buttons[1].afkrydset == true and felt.pins.buttons[2].afkrydset == false)
 felt.opacity:SetValue(70)
 kor(1)
@@ -776,7 +816,8 @@ tjek("/d2map bind ctrl-n", bindinger["CTRL-N"] == "D2MAP_TOGGLE")
 print("Nulstilling og gemte indstillinger")
 slash("reset")
 tjek("/d2map reset", D2MapDB.opacity == 40 and D2MapDB.span == 500 and D2MapDB.bindingOffered == true
-    and D2MapDB.terrain == false and D2MapDB.route == true and D2MapDB.rotate == false and D2MapDB.waypoint == true)
+    and D2MapDB.terrain == false and D2MapDB.route == true and D2MapDB.rotate == false and D2MapDB.waypoint == true
+    and D2MapDB.moveFade == false and D2MapDB.moveOpacity == 20)
 -- En ødelagt SavedVariables-fil: indlæs addon'en forfra og se, at den retter op.
 D2MapDB.opacity = "vrøvl"
 D2MapDB.size = 99999

@@ -38,6 +38,8 @@ local DEFAULTS = {
     opacity        = 40,       -- gennemsigtighed uden for combat, i procent
     combatOpacity  = 18,       -- gennemsigtighed i combat, i procent
     combatFade     = true,     -- skal det tones ned i combat?
+    moveOpacity    = 20,       -- gennemsigtighed, mens figuren bevæger sig, i procent
+    moveFade       = false,    -- skal den bruges? (fra: samme som når man står stille)
     fadeTime       = 0.35,     -- sekunder en toning varer
     size           = 560,      -- rammens bredde og højde i UI-enheder
     span           = 500,      -- hvor mange yards rammen dækker fra kant til kant
@@ -67,13 +69,14 @@ local DEFAULTS = {
 local LIMITS = {
     opacity       = { 0, 100 },
     combatOpacity = { 0, 100 },
+    moveOpacity   = { 0, 100 },
     size          = { 200, 1400 },
     span          = { 150, 2000 },
     pinScale      = { 0.5, 3 },
 }
 
 -- Disse gemmes som hele tal (procent, pixels, yards).
-local WHOLE = { opacity = true, combatOpacity = true, size = true, span = true }
+local WHOLE = { opacity = true, combatOpacity = true, moveOpacity = true, size = true, span = true }
 
 local SHAPES = { round = true, square = true, plain = true }
 local PIN_MODES = { all = true, objectives = true, off = true }
@@ -1451,15 +1454,22 @@ end -- afsnit 9
 -- 10. Gennemsigtighed og fading i combat
 --
 -- Terrænet får den valgte gennemsigtighed; pins og pilen er pinBoost gange mere
--- synlige (ellers drukner de). I combat glider begge ned til combatOpacity.
+-- synlige (ellers drukner de). Tre tilstande afgør målet:
+--     står stille    opacity
+--     bevæger sig    moveOpacity (hvis slået til) – må gerne være højere end opacity
+--     i combat       combatOpacity (hvis slået til), dog aldrig mere end ovenstående
 --------------------------------------------------------------------------------
 
+local MOVE_LINGER = 0.4        -- sekunder man tæller som «i bevægelse» efter sidste skridt
+
 local inCombat = false
+local moving = false           -- har figuren flyttet sig inden for det sidste øjeblik?
 local alpha = 0                -- den gennemsigtighed, der vises lige nu (0-1)
 
 local function TargetAlpha()
     local percent = db.opacity
-    if inCombat and db.combatFade then percent = min(db.opacity, db.combatOpacity) end
+    if moving and db.moveFade then percent = db.moveOpacity end
+    if inCombat and db.combatFade then percent = min(percent, db.combatOpacity) end
     -- Mens rammen flyttes, skal den kunne ses.
     if not db.locked then percent = max(percent, 60) end
     return percent / 100
@@ -1477,8 +1487,12 @@ local function UpdateFade(elapsed)
     if db.fadeTime <= 0 then
         alpha = target
     else
-        -- Farten svarer til, at springet mellem normal og combat tager fadeTime.
-        local range = max(0.1, abs(db.opacity - db.combatOpacity) / 100)
+        -- Farten svarer til, at det største spring mellem tilstandene tager fadeTime.
+        local range = abs(db.opacity - db.combatOpacity)
+        if db.moveFade then
+            range = max(range, abs(db.opacity - db.moveOpacity), abs(db.moveOpacity - db.combatOpacity))
+        end
+        range = max(0.1, range / 100)
         local step = range / db.fadeTime * elapsed
         if alpha < target then
             alpha = min(target, alpha + step)
@@ -1504,6 +1518,8 @@ end
 local sinceTick, sinceSync = 0, 0
 local hasPosition = nil        -- nil = ukendt, true/false = sidste opdatering
 local lastFacing = nil         -- figurens retning ved sidste opdatering
+local lastNorth, lastWest      -- figurens plads ved sidste opdatering
+local stillFor = MOVE_LINGER   -- sekunder siden figuren sidst flyttede sig
 local tickFailed = false
 
 local function Tick(elapsed)
@@ -1516,6 +1532,7 @@ local function Tick(elapsed)
             pinLayer:Hide()
             hasPosition = false
         end
+        lastNorth, moving = nil, false
         return
     end
     if hasPosition ~= true then
@@ -1523,6 +1540,17 @@ local function Tick(elapsed)
         pinLayer:Show()
         hasPosition = true
     end
+
+    -- Bevæger figuren sig? Afgøres på, om pladsen har ændret sig – det virker
+    -- også på flyvepunkter og i fald, og kræver ingen hemmelige værdier. Et
+    -- kort ophold tæller med, så kortet ikke blinker ved hvert stop.
+    if lastNorth and (north ~= lastNorth or west ~= lastWest) then
+        stillFor = 0
+    else
+        stillFor = stillFor + elapsed
+    end
+    lastNorth, lastWest = north, west
+    moving = stillFor < MOVE_LINGER
 
     -- Kortets drejning i denne opdatering: figurens retning, eller nord opad.
     local facing = PlayerFacing()
@@ -1597,6 +1625,7 @@ local function Resync() forceSync = true forceTick = true end
 -- Hvad der skal ske, når en indstilling har fået ny værdi. Gennemsigtighed står
 -- her ikke: toningen (afsnit 10) finder selv det nye mål.
 local AFTER = {
+    moveOpacity = function() db.moveFade = true end,       -- at vælge en værdi er at ville bruge den
     enabled  = ApplyEnabled,
     size     = ApplyLayout,
     locked   = ApplyLock,
@@ -1785,17 +1814,21 @@ local function CreateOptions()
     local byKey = {}           -- indstilling → felt (bruges af testen og til fejlfinding)
 
     byKey.enabled = MakeCheck(frame, Row(26), "Show automap", "enabled")
-    byKey.opacity = MakeSlider(frame, Row(42), "opacity", 0, 100, 1, function(v)
+    byKey.opacity = MakeSlider(frame, Row(38), "opacity", 0, 100, 1, function(v)
         return ("Opacity: %d%%"):format(v)
     end)
     byKey.combatFade = MakeCheck(frame, Row(26), "Fade in combat", "combatFade")
-    byKey.combatOpacity = MakeSlider(frame, Row(42), "combatOpacity", 0, 100, 1, function(v)
+    byKey.combatOpacity = MakeSlider(frame, Row(38), "combatOpacity", 0, 100, 1, function(v)
         return ("Opacity in combat: %d%%"):format(v)
     end)
-    byKey.span = MakeSlider(frame, Row(42), "span", LIMITS.span[1], LIMITS.span[2], 50, function(v)
+    byKey.moveFade = MakeCheck(frame, Row(26), "Different opacity while moving", "moveFade")
+    byKey.moveOpacity = MakeSlider(frame, Row(38), "moveOpacity", 0, 100, 1, function(v)
+        return ("Opacity while moving: %d%%"):format(v)
+    end)
+    byKey.span = MakeSlider(frame, Row(38), "span", LIMITS.span[1], LIMITS.span[2], 50, function(v)
         return ("Zoom: %d yards across"):format(v)
     end)
-    byKey.size = MakeSlider(frame, Row(46), "size", LIMITS.size[1], LIMITS.size[2], 20, function(v)
+    byKey.size = MakeSlider(frame, Row(42), "size", LIMITS.size[1], LIMITS.size[2], 20, function(v)
         return ("Size: %d pixels"):format(v)
     end)
 
@@ -1804,7 +1837,7 @@ local function CreateOptions()
     byKey.pins = MakeChoice(frame, Row(28), "Pins", "pins", {
         { "all", "All" }, { "objectives", "Objectives" }, { "off", "Off" },
     })
-    byKey.pinScale = MakeSlider(frame, Row(42), "pinScale", LIMITS.pinScale[1], LIMITS.pinScale[2], 0.1, function(v)
+    byKey.pinScale = MakeSlider(frame, Row(38), "pinScale", LIMITS.pinScale[1], LIMITS.pinScale[2], 0.1, function(v)
         return ("Pin size: %.1fx"):format(v)
     end)
     byKey.edgePins = MakeCheck(frame, Row(26), "Show nearest off-map objective on the rim", "edgePins")
@@ -1951,6 +1984,7 @@ local function PrintHelp()
         "/d2map toggle – show or hide the automap (also: on, off)",
         "/d2map opacity <0-100> – opacity out of combat (now " .. db.opacity .. ")",
         "/d2map combat <0-100|on|off> – opacity in combat (now " .. db.combatOpacity .. ", fade " .. OnOff(db.combatFade) .. ")",
+        "/d2map moving <0-100|on|off> – opacity while you move (now " .. db.moveOpacity .. ", " .. OnOff(db.moveFade) .. ")",
         "/d2map zoom <yards|in|out> – yards across the frame (now " .. db.span .. ")",
         "/d2map size <pixels> – frame size (now " .. db.size .. ")",
         "/d2map shape <round|square|plain> – edge mask (now " .. db.shape .. ")",
@@ -1976,9 +2010,9 @@ end
 
 local function PrintStatus()
     local continent, north, west = PlayerPosition()
-    Print(("%s, opacity %d%% (combat %d%%, fade %s), %d yards across %d px, shape %s, style %s"):format(
+    Print(("%s, opacity %d%% (combat %d%% %s, moving %d%% %s), %d yards across %d px, shape %s, style %s"):format(
         db.enabled and "shown" or "hidden", db.opacity, db.combatOpacity, OnOff(db.combatFade),
-        db.span, db.size, db.shape, db.style))
+        db.moveOpacity, OnOff(db.moveFade), db.span, db.size, db.shape, db.style))
     if continent then
         Print(("position: continent %d, %.0f north, %.0f west; terrain %s, %d tiles%s"):format(
             continent, north, west, OnOff(db.terrain), tilesShown,
@@ -2061,6 +2095,15 @@ commands.combat = function(rest)
         SetNumber("combatOpacity", rest, "combat")
     end
 end
+
+commands.moving = function(rest)
+    if rest == "on" or rest == "off" then
+        SetFlag("moveFade", rest, "moving opacity")
+    else
+        SetNumber("moveOpacity", rest, "moving")
+    end
+end
+commands.move = commands.moving
 
 commands.zoom = function(rest)
     if rest == "in" or rest == "out" then

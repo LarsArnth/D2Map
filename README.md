@@ -7,7 +7,7 @@ bevægelse og targeting går lige igennem.
 
 ```sh
 ./installer.sh        # kopierer D2Map/ ind i spillets AddOns-mappe
-lua test/koer.lua     # 137 tjek mod en attrap af WoW's API
+lua test/koer.lua     # 149 tjek mod en attrap af WoW's API
 lua test/tegn.lua     # tegner formerne for nogle prøvesæt til docs/former.svg
 ```
 
@@ -25,6 +25,7 @@ ajour:
 | `/d2map toggle` | Vis eller skjul (også `on` / `off`) |
 | `/d2map opacity <0-100>` | Gennemsigtighed uden for combat (standard 40) |
 | `/d2map combat <0-100\|on\|off>` | Gennemsigtighed i combat (standard 18), eller slå toningen fra |
+| `/d2map moving <0-100\|on\|off>` | Gennemsigtighed, mens figuren bevæger sig (fra som standard; et tal slår den til) |
 | `/d2map zoom <yards\|in\|out>` | Hvor mange yards rammen dækker (standard 500) |
 | `/d2map size <pixels>` | Rammens størrelse (standard 560) |
 | `/d2map shape <round\|square\|plain>` | Bløde kanter som cirkel eller firkant; `plain` = ingen maske |
@@ -87,9 +88,14 @@ Indstillingerne gemmes pr. figur i `D2MapDB`.
 - **To takter.** Pins *hentes* fra adapteren én gang i sekundet og *flyttes*
   hvert 0,1 sekund. `OnUpdate` sidder på selve rammen, så et skjult automap
   koster ingenting.
-- **Fading.** `PLAYER_REGEN_DISABLED` / `PLAYER_REGEN_ENABLED` sætter et mål, og
-  gennemsigtigheden glider derhen på 0,35 sekund. Pins er dobbelt så synlige som
-  terrænet (`pinBoost`).
+- **Fading.** Tre tilstande giver et mål, og gennemsigtigheden glider derhen på
+  0,35 sekund: står stille = `opacity`; bevæger sig = `moveOpacity` (hvis slået
+  til – må gerne være højere end `opacity`); i combat = `combatOpacity`, dog
+  aldrig mere end de to andre. Combat kommer fra `PLAYER_REGEN_DISABLED` /
+  `PLAYER_REGEN_ENABLED`. Bevægelse afgøres på, om positionen har ændret sig
+  siden sidste opdatering (virker på flyvepunkter og kræver ingen hemmelige
+  værdier), og et stop på under 0,4 sekund tæller stadig som bevægelse, så
+  kortet ikke blinker. Pins er dobbelt så synlige som terrænet (`pinBoost`).
 
 - **Former om klynger** (afsnit 8). Først var det en streg gennem hvert mål
   (korteste rute, version 1.2), men Lars ville ikke ramme hver mob: «tegn en
