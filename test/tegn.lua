@@ -46,7 +46,12 @@ local function scenarie(navn, punkter, span)
     ud[#ud + 1] = '<text x="-290" y="-278" fill="#aaa" font-size="14" font-family="sans-serif">' .. navn .. ' – ' .. #linjer() .. ' linjestykker</text></svg>'
     local f = io.open(mappe .. "/" .. navn .. ".svg", "w") f:write(table.concat(ud, "\n")) f:close()
     SlashCmdList.D2MAP("status")
-    print(navn .. ": " .. chat[#chat]:gsub("^.-outlines: on, ", ""))
+    for i = #chat, 1, -1 do                                -- statuslinjen om formerne
+        if chat[i]:find("outlines: ", 1, true) then
+            print(navn .. ": " .. chat[i]:gsub("^.-outlines: on, ", ""))
+            break
+        end
+    end
     navne[#navne + 1] = navn
     svg[navn] = table.concat(ud, "\n")
 end
