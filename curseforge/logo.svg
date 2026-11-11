@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="45%" r="70%">
+      <stop offset="0" stop-color="#3a2c1a"/>
+      <stop offset="1" stop-color="#120d08"/>
+    </radialGradient>
+    <radialGradient id="map" cx="50%" cy="50%" r="50%">
+      <stop offset="0.6" stop-color="#c8a04b" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#c8a04b" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="512" height="512" rx="72" fill="url(#bg)"/>
+  <circle cx="256" cy="256" r="216" fill="url(#map)"/>
+  <circle cx="256" cy="256" r="196" fill="none" stroke="#c8a04b" stroke-opacity="0.35" stroke-width="3"/>
+  <!-- en blød form om en klynge af mål -->
+  <path d="M150 150 C190 110 270 118 300 150 C330 182 318 232 276 248 C232 264 168 252 142 214 C128 192 132 168 150 150 Z"
+        fill="none" stroke="#f2cc59" stroke-width="7" stroke-linejoin="round"/>
+  <g fill="#ffd21a" stroke="#1a1208" stroke-width="4">
+    <circle cx="186" cy="168" r="13"/><circle cx="248" cy="158" r="13"/>
+    <circle cx="272" cy="208" r="13"/><circle cx="196" cy="216" r="13"/>
+  </g>
+  <!-- guidens vej: grønne prikker til et gult mål -->
+  <g fill="#59ff73" stroke="#0c1a0e" stroke-width="4">
+    <circle cx="286" cy="286" r="10"/><circle cx="312" cy="308" r="10"/><circle cx="338" cy="330" r="10"/>
+    <circle cx="362" cy="354" r="10"/><circle cx="380" cy="382" r="10"/>
+  </g>
+  <circle cx="392" cy="414" r="17" fill="#ffd91a" stroke="#1a1208" stroke-width="5"/>
+  <!-- spilleren i midten -->
+  <path d="M256 222 L280 286 L256 272 L232 286 Z" fill="#f4f0e6" stroke="#1a1208" stroke-width="5" stroke-linejoin="round"/>
+</svg>

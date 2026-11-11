@@ -59,6 +59,8 @@ Indstillingerne gemmes pr. figur i `D2MapDB`.
 | `D2Map/Bindings.xml` | De tre tastaturgenveje |
 | `D2Map/Data/MinimapTiles.lua` | Fil-id'er for minimap-fliserne. **Genereret** af `scripts/byg-fliser.lua` |
 | `D2Map/Media/*.tga` | Maskerne til de bløde kanter og prikken til guidens vej. **Genereret** af `scripts/byg-masker.py` |
+| `scripts/pak.sh` | Pakker `dist/D2Map-<version>.zip` (mappen `D2Map/` med licens og noter) til CurseForge |
+| `curseforge/` | Engelsk beskrivelse, logo og felterne til CurseForge-projektet |
 | `test/tegn.lua` | Tegner klyngeformerne for fem prøvesæt, så man kan se dem (`docs/former.png`) |
 | `test/koer.lua` | Testen: indlæser addon'en mod en attrap, der kun kender de API-metoder, addon'en må bruge |
 
