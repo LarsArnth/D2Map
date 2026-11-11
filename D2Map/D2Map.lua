@@ -15,8 +15,10 @@
 --   7. Pins på automappet
 --   8. Gennemsigtighed og fading i combat
 --   9. Opdateringsløkken (droslet OnUpdate)
---  10. Offentlig API, tastaturgenveje og slash-kommandoer
---  11. Events
+--  10. Indstillinger: ét sted, hvor en værdi sættes
+--  11. Indstillingsvinduet (/d2map)
+--  12. Offentlig API, tastaturgenveje og slash-kommandoer
+--  13. Events
 --
 -- Skrevet til WoW: Forever (interface 16001), men bruger kun API'er, der også
 -- findes i Classic Era, og tjekker for hver af dem, om den findes.
@@ -39,7 +41,7 @@ local DEFAULTS = {
     span           = 500,      -- hvor mange yards rammen dækker fra kant til kant
     shape          = "round",  -- round | square | plain (plain = ingen maske)
     style          = "color",  -- color | sepia | ghost
-    terrain        = true,     -- vis minimap-fliserne
+    terrain        = false,    -- vis minimap-fliserne (fra: kun pins og pilen)
     pins           = "all",    -- all | objectives | off
     pinScale       = 1.0,      -- størrelsesfaktor for pins
     pinBoost       = 2.0,      -- pins er så mange gange mere synlige end terrænet
@@ -53,6 +55,7 @@ local DEFAULTS = {
     pinSyncInterval = 1.0,     -- sekunder mellem at pins hentes fra adapteren
     maxPins        = 200,      -- loft over pins tegnet på én gang
     bindingOffered = false,    -- har vi prøvet at lægge Alt+M på toggle?
+    settingsVersion = 2,       -- se MigrateSettings
 }
 
 -- Tilladte intervaller for de tal, brugeren kan sætte.
@@ -132,6 +135,15 @@ local function Print(msg)
     else
         print(text)
     end
+end
+
+-- Ændringer i standarderne, som også skal gælde figurer med gemte indstillinger.
+local function MigrateSettings()
+    local version = tonumber(db.settingsVersion) or 1
+    -- Version 2: terrænet er slået fra som standard. Den første udgave gemte
+    -- "til" hos alle, så det rettes én gang; slår man det til igen, bliver det.
+    if version < 2 then db.terrain = false end
+    db.settingsVersion = DEFAULTS.settingsVersion
 end
 
 -- Fylder manglende nøgler ud og retter værdier, der er af forkert type eller
@@ -911,23 +923,286 @@ local function ApplyEnabled()
 end
 
 --------------------------------------------------------------------------------
--- 10. Offentlig API, tastaturgenveje og slash-kommandoer
+-- 10. Indstillinger: ét sted, hvor en værdi sættes
+--
+-- Indstillingsvinduet, slash-kommandoerne og tastaturgenvejene går alle gennem
+-- Set(), så de aldrig kommer ud af trit: ændrer man noget ét sted, følger de
+-- andre med.
 --------------------------------------------------------------------------------
+
+local RefreshOptions = function() end      -- erstattes i afsnit 11, når vinduet er bygget
+
+local function Redraw() forceTick = true end
+local function Resync() forceSync = true forceTick = true end
+
+-- Hvad der skal ske, når en indstilling har fået ny værdi. Gennemsigtighed står
+-- her ikke: toningen (afsnit 8) finder selv det nye mål.
+local AFTER = {
+    enabled  = ApplyEnabled,
+    size     = ApplyLayout,
+    locked   = ApplyLock,
+    style    = ApplyStyle,
+    shape    = function() ApplyShape() Redraw() end,
+    span     = Redraw,
+    pinScale = Redraw,
+    edgePins = Redraw,
+    terrain  = Redraw,
+    pins     = Resync,
+    source   = Resync,
+}
+
+local function Set(key, value)
+    local limit = LIMITS[key]
+    if limit then
+        value = Clamp(value, limit[1], limit[2])
+        if WHOLE[key] then value = floor(value + 0.5) end
+    end
+    db[key] = value
+    local after = AFTER[key]
+    if after then after() end
+    RefreshOptions()
+end
 
 local function Toggle()
     if not root then return end
-    db.enabled = not db.enabled
-    ApplyEnabled()
+    Set("enabled", not db.enabled)
 end
 
 SetSpan = function(yards)
-    db.span = Clamp(floor(yards + 0.5), LIMITS.span[1], LIMITS.span[2])
-    forceTick = true
+    Set("span", yards)
 end
+
+local function Center()
+    db.x, db.y = 0, 0
+    ApplyLayout()
+end
+
+local function ResetAll()
+    local offered = db.bindingOffered
+    wipe(db)
+    for key, value in pairs(DEFAULTS) do db[key] = value end
+    db.bindingOffered = offered
+    ApplyLayout()
+    ApplyShape()
+    ApplyStyle()
+    ApplyLock()
+    ApplyEnabled()
+    RefreshOptions()
+end
+
+--------------------------------------------------------------------------------
+-- 11. Indstillingsvinduet (/d2map)
+--
+-- Et lille vindue med afkrydsningsfelter, skydere og valg. Alt virker med det
+-- samme, så man kan se automappet ændre sig, mens man trækker. Vinduet bygges
+-- først, når det åbnes første gang, og bruger kun Blizzards egne skabeloner.
+--------------------------------------------------------------------------------
+
+local PANEL_WIDTH = 380
+local options                  -- vinduet (nil, til det åbnes første gang)
+local controls = {}            -- alt i vinduet, der skal vise en indstillings værdi
+local refreshing = false       -- true, mens vinduet selv sætter værdier i sine felter
+
+local function MakeLabel(parent, text, font)
+    local label = parent:CreateFontString(nil, "OVERLAY", font or "GameFontHighlight")
+    label:SetText(text)
+    return label
+end
+
+-- Teksten ved siden af et afkrydsningsfelt; et klik på teksten tæller også.
+local function LabelCheck(check, text, gap)
+    local label = MakeLabel(check, text)
+    label:SetPoint("LEFT", check, "RIGHT", gap, 0)
+    if check.SetHitRectInsets and label.GetStringWidth then
+        check:SetHitRectInsets(0, -(label:GetStringWidth() + gap), 0, 0)
+    end
+end
+
+-- Afkrydsningsfelt for en til/fra-indstilling. inverted bruges til «Unlock»,
+-- som er det modsatte af db.locked.
+local function MakeCheck(parent, y, text, key, inverted)
+    local check = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
+    check:SetSize(24, 24)
+    check:SetPoint("TOPLEFT", parent, "TOPLEFT", 14, y)
+    LabelCheck(check, text, 2)
+    check:SetScript("OnClick", function(self)
+        local on = self:GetChecked() and true or false
+        if inverted then on = not on end
+        Set(key, on)
+    end)
+    check.Refresh = function()
+        local on = db[key] and true or false
+        if inverted then on = not on end
+        check:SetChecked(on)
+    end
+    controls[#controls + 1] = check
+    return check
+end
+
+-- Skyder for et tal. describe(value) giver teksten over skyderen, fx "Opacity: 40%".
+local function MakeSlider(parent, y, key, low, high, step, describe)
+    local title = MakeLabel(parent, "")
+    title:SetPoint("TOPLEFT", parent, "TOPLEFT", 20, y)
+    local slider = CreateFrame("Slider", nil, parent, "OptionsSliderTemplate")
+    slider:SetPoint("TOPLEFT", parent, "TOPLEFT", 22, y - 17)
+    slider:SetWidth(PANEL_WIDTH - 44)
+    slider:SetMinMaxValues(low, high)
+    slider:SetValueStep(step)
+    if slider.SetObeyStepOnDrag then slider:SetObeyStepOnDrag(true) end
+    -- Skabelonens egne tekster (titel, min, maks) bruges ikke.
+    for _, name in ipairs({ "Text", "Low", "High" }) do
+        local region = slider[name]
+        if region and region.SetText then region:SetText("") end
+    end
+    slider:SetScript("OnValueChanged", function(_, value)
+        if refreshing then return end
+        Set(key, floor(value / step + 0.5) * step)      -- hold værdien på trinnet
+    end)
+    slider.Refresh = function()
+        slider:SetValue(db[key])
+        title:SetText(describe(db[key]))
+    end
+    controls[#controls + 1] = slider
+    return slider
+end
+
+-- En række med ét valg blandt flere (som radioknapper): choices er en liste af
+-- { værdi, tekst }.
+local function MakeChoice(parent, y, text, key, choices)
+    MakeLabel(parent, text):SetPoint("TOPLEFT", parent, "TOPLEFT", 20, y - 5)
+    local row = { buttons = {} }
+    for i, choice in ipairs(choices) do
+        local check = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
+        check:SetSize(22, 22)
+        check:SetPoint("TOPLEFT", parent, "TOPLEFT", 78 + (i - 1) * 98, y)
+        LabelCheck(check, choice[2], 0)
+        check:SetScript("OnClick", function() Set(key, choice[1]) end)
+        row.buttons[i] = check
+    end
+    row.Refresh = function()
+        for i, choice in ipairs(choices) do
+            row.buttons[i]:SetChecked(db[key] == choice[1])
+        end
+    end
+    controls[#controls + 1] = row
+    return row
+end
+
+local function MakeButton(parent, text, width, onClick)
+    local button = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
+    button:SetSize(width, 22)
+    button:SetText(text)
+    button:SetScript("OnClick", onClick)
+    return button
+end
+
+local function CreateOptions()
+    local frame = CreateFrame("Frame", "D2MapOptions", UIParent, "BasicFrameTemplateWithInset")
+    frame:SetFrameStrata("DIALOG")
+    if frame.SetToplevel then frame:SetToplevel(true) end
+    frame:SetClampedToScreen(true)
+    frame:SetMovable(true)
+    frame:EnableMouse(true)
+    frame:RegisterForDrag("LeftButton")
+    frame:SetScript("OnDragStart", frame.StartMoving)
+    frame:SetScript("OnDragStop", frame.StopMovingOrSizing)
+    -- Til højre for midten, så vinduet ikke dækker automappet, mens man indstiller.
+    frame:SetPoint("CENTER", UIParent, "CENTER", 440, 0)
+    if frame.TitleText then frame.TitleText:SetText("D2Map") end
+    -- Escape lukker vinduet, som Blizzards egne vinduer.
+    if UISpecialFrames then table.insert(UISpecialFrames, "D2MapOptions") end
+
+    -- Rækkerne lægges oppefra; Row(højde) giver næste rækkes y og rykker ned.
+    local y = -34
+    local function Row(height)
+        local at = y
+        y = y - height
+        return at
+    end
+
+    local byKey = {}           -- indstilling → felt (bruges af testen og til fejlfinding)
+
+    byKey.enabled = MakeCheck(frame, Row(26), "Show automap", "enabled")
+    byKey.opacity = MakeSlider(frame, Row(42), "opacity", 0, 100, 1, function(v)
+        return ("Opacity: %d%%"):format(v)
+    end)
+    byKey.combatFade = MakeCheck(frame, Row(26), "Fade in combat", "combatFade")
+    byKey.combatOpacity = MakeSlider(frame, Row(42), "combatOpacity", 0, 100, 1, function(v)
+        return ("Opacity in combat: %d%%"):format(v)
+    end)
+    byKey.span = MakeSlider(frame, Row(42), "span", LIMITS.span[1], LIMITS.span[2], 50, function(v)
+        return ("Zoom: %d yards across"):format(v)
+    end)
+    byKey.size = MakeSlider(frame, Row(46), "size", LIMITS.size[1], LIMITS.size[2], 20, function(v)
+        return ("Size: %d pixels"):format(v)
+    end)
+
+    byKey.pins = MakeChoice(frame, Row(28), "Pins", "pins", {
+        { "all", "All" }, { "objectives", "Objectives" }, { "off", "Off" },
+    })
+    byKey.pinScale = MakeSlider(frame, Row(42), "pinScale", LIMITS.pinScale[1], LIMITS.pinScale[2], 0.1, function(v)
+        return ("Pin size: %.1fx"):format(v)
+    end)
+    byKey.edgePins = MakeCheck(frame, Row(30), "Show nearest off-map objective on the rim", "edgePins")
+
+    byKey.terrain = MakeCheck(frame, Row(26), "Show terrain (minimap tiles)", "terrain")
+    byKey.style = MakeChoice(frame, Row(26), "Look", "style", {
+        { "color", "Color" }, { "sepia", "Sepia" }, { "ghost", "Ghost" },
+    })
+    byKey.shape = MakeChoice(frame, Row(30), "Shape", "shape", {
+        { "round", "Round" }, { "square", "Square" }, { "plain", "Plain" },
+    })
+
+    byKey.locked = MakeCheck(frame, Row(30), "Unlock to move (drag the map, wheel zooms)", "locked", true)
+
+    local center = MakeButton(frame, "Center map", 110, Center)
+    center:SetPoint("TOPLEFT", frame, "TOPLEFT", 18, Row(30))
+    local reset = MakeButton(frame, "Reset all", 110, ResetAll)
+    reset:SetPoint("LEFT", center, "RIGHT", 8, 0)
+
+    -- Hvilken tast åbner og lukker automappet lige nu?
+    local hint = MakeLabel(frame, "", "GameFontDisableSmall")
+    hint:SetPoint("TOPLEFT", frame, "TOPLEFT", 20, Row(18))
+    controls[#controls + 1] = { Refresh = function()
+        local key = GetBindingKey and GetBindingKey("D2MAP_TOGGLE")
+        hint:SetText(key and ("Toggle key: " .. key .. "  (Key Bindings > D2Map)")
+            or "No toggle key set  (Key Bindings > D2Map)")
+    end }
+
+    frame:SetSize(PANEL_WIDTH, -y + 12)
+    frame.controls = byKey
+    frame:SetScript("OnShow", RefreshOptions)
+    frame:Hide()
+    return frame
+end
+
+-- Sætter alle felter efter de gemte indstillinger. Kaldes, når vinduet åbnes,
+-- og hver gang Set() har ændret noget, mens det er åbent.
+RefreshOptions = function()
+    if not options or not options:IsShown() then return end
+    refreshing = true
+    for _, control in ipairs(controls) do control.Refresh() end
+    refreshing = false
+end
+
+local function ToggleOptions()
+    if not root then return end
+    if not options then options = CreateOptions() end
+    if options:IsShown() then
+        options:Hide()
+    else
+        options:Show()
+    end
+end
+
+--------------------------------------------------------------------------------
+-- 12. Offentlig API, tastaturgenveje og slash-kommandoer
+--------------------------------------------------------------------------------
 
 -- Globale navne: bruges af Bindings.xml og af andre addons.
 D2Map = {
     Toggle = Toggle,
+    ToggleOptions = ToggleOptions,
     RegisterAdapter = RegisterAdapter,
     EmitPin = EmitPin,
 }
@@ -954,6 +1229,7 @@ local function BindToggle(key)
     local ok, set = pcall(SetBinding, key, "D2MAP_TOGGLE")
     if not (ok and set) then return false end
     pcall(SaveBindings, GetCurrentBindingSet())
+    RefreshOptions()
     return true
 end
 
@@ -1003,7 +1279,7 @@ local function OnOff(value)
 end
 
 local function PrintHelp()
-    Print("commands:")
+    Print("/d2map opens the options window. The same settings as commands:")
     local lines = {
         "/d2map toggle – show or hide the automap (also: on, off)",
         "/d2map opacity <0-100> – opacity out of combat (now " .. db.opacity .. ")",
@@ -1034,8 +1310,8 @@ local function PrintStatus()
         db.enabled and "shown" or "hidden", db.opacity, db.combatOpacity, OnOff(db.combatFade),
         db.span, db.size, db.shape, db.style))
     if continent then
-        Print(("position: continent %d, %.0f north, %.0f west; %d terrain tiles%s"):format(
-            continent, north, west, tilesShown,
+        Print(("position: continent %d, %.0f north, %.0f west; terrain %s, %d tiles%s"):format(
+            continent, north, west, OnOff(db.terrain), tilesShown,
             (ns.Tiles and ns.Tiles[continent]) and "" or " (no tile data for this continent)"))
     else
         Print("position: not available here (instances hide it from addons)")
@@ -1053,8 +1329,7 @@ local function SetNumber(key, text, label)
         Print(("usage: /d2map %s <%s-%s>"):format(label, tostring(limit[1]), tostring(limit[2])))
         return false
     end
-    db[key] = Clamp(value, limit[1], limit[2])
-    if WHOLE[key] then db[key] = floor(db[key] + 0.5) end
+    Set(key, value)
     Print(("%s set to %s"):format(label, tostring(db[key])))
     return true
 end
@@ -1068,31 +1343,37 @@ local function SetChoice(key, text, choices, label)
         Print(("usage: /d2map %s <%s>"):format(label, table.concat(names, "|")))
         return false
     end
-    db[key] = text
+    Set(key, text)
     Print(("%s set to %s"):format(label, text))
     return true
 end
 
+-- on, off eller ingenting (= skift).
 local function SetFlag(key, text, label)
+    local value
     if text == "on" then
-        db[key] = true
+        value = true
     elseif text == "off" then
-        db[key] = false
+        value = false
     elseif text == "" then
-        db[key] = not db[key]
+        value = not db[key]
     else
         Print(("usage: /d2map %s <on|off>"):format(label))
         return false
     end
+    Set(key, value)
     Print(("%s %s"):format(label, OnOff(db[key])))
     return true
 end
 
 local commands = {}
 
+commands.options = ToggleOptions
+commands.config = ToggleOptions
+
 commands.toggle = function() Toggle() end
-commands.on = function() db.enabled = true ApplyEnabled() end
-commands.off = function() db.enabled = false ApplyEnabled() end
+commands.on = function() Set("enabled", true) end
+commands.off = function() Set("enabled", false) end
 commands.show = commands.on
 commands.hide = commands.off
 
@@ -1108,64 +1389,35 @@ commands.combat = function(rest)
 end
 
 commands.zoom = function(rest)
-    if rest == "in" then
-        SetSpan(db.span * 0.8)
-    elseif rest == "out" then
-        SetSpan(db.span * 1.25)
-    elseif not SetNumber("span", rest, "zoom") then
-        return
+    if rest == "in" or rest == "out" then
+        SetSpan(db.span * (rest == "in" and 0.8 or 1.25))
+        Print("zoom set to " .. db.span .. " yards")
+    else
+        SetNumber("span", rest, "zoom")
     end
-    forceTick = true
-    if rest == "in" or rest == "out" then Print("zoom set to " .. db.span .. " yards") end
 end
 
-commands.size = function(rest)
-    if SetNumber("size", rest, "size") then ApplyLayout() end
-end
-
-commands.shape = function(rest)
-    if SetChoice("shape", rest, SHAPES, "shape") then ApplyShape() forceTick = true end
-end
-
-commands.style = function(rest)
-    if SetChoice("style", rest, STYLES, "style") then ApplyStyle() end
-end
-
-commands.pins = function(rest)
-    if SetChoice("pins", rest, PIN_MODES, "pins") then forceSync = true forceTick = true end
-end
-
-commands.pinsize = function(rest)
-    if SetNumber("pinScale", rest, "pinsize") then forceTick = true end
-end
-
-commands.edge = function(rest)
-    if SetFlag("edgePins", rest, "edge pins") then forceTick = true end
-end
-
-commands.terrain = function(rest)
-    if SetFlag("terrain", rest, "terrain") then forceTick = true end
-end
-
-commands.source = function(rest)
-    if SetChoice("source", rest, SOURCES, "source") then forceSync = true forceTick = true end
-end
+commands.size = function(rest) SetNumber("size", rest, "size") end
+commands.shape = function(rest) SetChoice("shape", rest, SHAPES, "shape") end
+commands.style = function(rest) SetChoice("style", rest, STYLES, "style") end
+commands.pins = function(rest) SetChoice("pins", rest, PIN_MODES, "pins") end
+commands.pinsize = function(rest) SetNumber("pinScale", rest, "pinsize") end
+commands.edge = function(rest) SetFlag("edgePins", rest, "edge pins") end
+commands.terrain = function(rest) SetFlag("terrain", rest, "terrain") end
+commands.source = function(rest) SetChoice("source", rest, SOURCES, "source") end
 
 commands.unlock = function()
-    db.locked = false
-    ApplyLock()
+    Set("locked", false)
     Print("unlocked: drag to move, mouse wheel to zoom. /d2map lock makes it click-through again.")
 end
 
 commands.lock = function()
-    db.locked = true
-    ApplyLock()
+    Set("locked", true)
     Print("locked: mouse clicks pass straight through.")
 end
 
 commands.center = function()
-    db.x, db.y = 0, 0
-    ApplyLayout()
+    Center()
     Print("centered.")
 end
 
@@ -1186,24 +1438,20 @@ end
 commands.status = PrintStatus
 
 commands.reset = function()
-    local offered = db.bindingOffered
-    wipe(db)
-    for key, value in pairs(DEFAULTS) do db[key] = value end
-    db.bindingOffered = offered
-    ApplyLayout()
-    ApplyShape()
-    ApplyStyle()
-    ApplyLock()
-    ApplyEnabled()
+    ResetAll()
     Print("all settings reset.")
 end
 
 commands.help = PrintHelp
 
+-- /d2map uden noget efter åbner indstillingsvinduet; med et ord er det en kommando.
 local function SlashHandler(message)
     if not db or not root then return end
     local command, rest = (message or ""):lower():match("^%s*(%S*)%s*(.-)%s*$")
-    if command == "" then command = "help" end
+    if command == "" then
+        ToggleOptions()
+        return
+    end
     local handler = commands[command]
     if handler then
         handler(rest)
@@ -1218,29 +1466,30 @@ SLASH_D2MAP2 = "/automap"
 SlashCmdList["D2MAP"] = SlashHandler
 
 --------------------------------------------------------------------------------
--- 11. Events
+-- 13. Events
 --------------------------------------------------------------------------------
 
 local events = CreateFrame("Frame")
 
 local handlers = {}
 
+local function LoadSettings()
+    if type(D2MapDB) ~= "table" then D2MapDB = {} end
+    db = D2MapDB
+    MigrateSettings()
+    ValidateSettings()
+end
+
 -- Gemte indstillinger er klar: fyld defaults ud.
 function handlers.ADDON_LOADED(name)
     if name ~= ADDON then return end
     events:UnregisterEvent("ADDON_LOADED")
-    if type(D2MapDB) ~= "table" then D2MapDB = {} end
-    db = D2MapDB
-    ValidateSettings()
+    LoadSettings()
 end
 
 -- UIParent har sin endelige størrelse: byg rammerne.
 function handlers.PLAYER_LOGIN()
-    if not db then
-        D2MapDB = type(D2MapDB) == "table" and D2MapDB or {}
-        db = D2MapDB
-        ValidateSettings()
-    end
+    if not db then LoadSettings() end
     inCombat = InCombatLockdown ~= nil and InCombatLockdown() == true
     CreateFrames()
     root:SetScript("OnUpdate", OnUpdate)

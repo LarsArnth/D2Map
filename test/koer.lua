@@ -38,7 +38,8 @@ for _, navn in ipairs({
     "SetAllPoints", "SetMouseClickEnabled", "SetMouseMotionEnabled", "EnableMouseWheel",
     "ClearAllPoints", "StartMoving", "StopMovingOrSizing", "RegisterEvent", "UnregisterEvent",
     "SetAtlas", "SetColorTexture", "SetWidth", "SetHeight", "SetDesaturated", "SetBlendMode",
-    "SetSnapToPixelGrid", "SetTexelSnappingBias", "SetDrawLayer", "SetText",
+    "SetSnapToPixelGrid", "SetTexelSnappingBias", "SetDrawLayer",
+    "SetToplevel", "SetMinMaxValues", "SetValueStep", "SetObeyStepOnDrag",
 }) do
     Widget[navn] = tom
 end
@@ -50,8 +51,29 @@ function Widget:EnableMouse(til) self.mus = til end
 function Widget:SetSize(b, h) self.bredde, self.hoejde = b, h end
 function Widget:SetPoint(punkt, rel, relPunkt, x, y) self.punkter[punkt] = { rel = rel, relPunkt = relPunkt, x = x, y = y } end
 function Widget:GetCenter() return 800, 450 end
-function Widget:Show() self.synlig = true end
+function Widget:Show()
+    local var = self.synlig
+    self.synlig = true
+    if not var and self.scripts.OnShow then self.scripts.OnShow(self) end
+end
 function Widget:Hide() self.synlig = false end
+function Widget:IsShown() return self.synlig end
+function Widget:SetText(t) self.tekst = t end
+function Widget:GetStringWidth() return 6 * #(self.tekst or "") end
+function Widget:SetHitRectInsets(v, h) self.klikbredde = -h end
+function Widget:SetChecked(til) self.afkrydset = til and true or false end
+function Widget:GetChecked() return self.afkrydset end
+function Widget:GetValue() return self.vaerdi end
+-- Som i spillet: at sætte en skyders værdi fyrer OnValueChanged.
+function Widget:SetValue(v)
+    self.vaerdi = v
+    if self.scripts.OnValueChanged then self.scripts.OnValueChanged(self, v) end
+end
+-- Et klik på et afkrydsningsfelt: skift fluebenet og kør OnClick, som spillet gør.
+function Widget:Klik()
+    if self.slags == "CheckButton" then self.afkrydset = not self.afkrydset end
+    self.scripts.OnClick(self)
+end
 function Widget:SetAlpha(a) self.alfa = a end
 function Widget:SetTexture(t, ...) self.tekstur = t end
 function Widget:GetTexture() return self.tekstur end
@@ -72,8 +94,21 @@ Widget.CreateFontString = barn("FontString")
 
 local rammer = {}
 UIParent = NyWidget("Frame")
-function CreateFrame(slags, navn, foraelder)
+UISpecialFrames = {}
+-- Kun de skabeloner, andre Forever-addons bruger i dag (set i ForeverDualGathering,
+-- OneForAll og OpenMap). En ukendt skabelon vælter testen.
+local SKABELONER = {
+    BasicFrameTemplateWithInset = function(w) w.TitleText = NyWidget("FontString", w) w.CloseButton = NyWidget("Button", w) end,
+    OptionsSliderTemplate = function(w) w.Text, w.Low, w.High = NyWidget("FontString", w), NyWidget("FontString", w), NyWidget("FontString", w) end,
+    UICheckButtonTemplate = function() end,
+    UIPanelButtonTemplate = function() end,
+}
+function CreateFrame(slags, navn, foraelder, skabelon)
     local w = NyWidget(slags, foraelder)
+    if skabelon then
+        assert(SKABELONER[skabelon], "ukendt skabelon: " .. tostring(skabelon))(w)
+        w.skabelon = skabelon
+    end
     if navn then _G[navn] = w end
     rammer[#rammer + 1] = w
     return w
@@ -176,6 +211,7 @@ fyr("ADDON_LOADED", "EnAndenAddon")
 tjek("andre addons' ADDON_LOADED rører ikke indstillingerne", D2MapDB == nil)
 fyr("ADDON_LOADED", "D2Map")
 tjek("defaults fyldes ud", D2MapDB.opacity == 40 and D2MapDB.combatOpacity == 18 and D2MapDB.enabled == true)
+tjek("terræn er slået fra som standard", D2MapDB.terrain == false)
 fyr("PLAYER_LOGIN")
 fyr("PLAYER_ENTERING_WORLD")
 
@@ -213,6 +249,9 @@ local function pinVed(x, y)
 end
 
 print("Terræn")
+kor(0.3)
+tjek("uden terræn tegnes ingen fliser, men pilen er der", #fliser() == 0 and pinLayer.synlig == true)
+SlashCmdList.D2MAP("terrain on")
 kor(0.3)
 local f = fliser()
 tjek("fliser tegnes omkring spilleren", #f >= 1 and #f <= 4, #f)
@@ -330,10 +369,61 @@ tjek("/d2map unlock slår mus til og viser kanten", root.mus == true and mover.s
 slash("lock")
 tjek("/d2map lock er click-through igen", root.mus == false and mover.synlig == false)
 slash("noget-ukendt")
-slash("")
 slash("status")
 slash("help")
 tjek("hjælp og status skriver i chatten", #chat > 20)
+
+print("Indstillingsvinduet")
+tjek("vinduet bygges først, når det åbnes", D2MapOptions == nil)
+slash("")
+local vindue = D2MapOptions
+tjek("/d2map åbner indstillingsvinduet", vindue ~= nil and vindue.synlig == true)
+tjek("Escape lukker det (UISpecialFrames)", UISpecialFrames[1] == "D2MapOptions")
+tjek("teksten ved et afkrydsningsfelt kan også klikkes", vindue.controls.terrain.klikbredde > 100)
+local felt = vindue.controls
+tjek("felterne viser de gemte værdier", felt.enabled.afkrydset == true and felt.opacity.vaerdi == 40
+    and felt.span.vaerdi == 500 and felt.terrain.afkrydset == true and felt.locked.afkrydset == false)
+tjek("valget for pins står på All", felt.pins.buttons[1].afkrydset == true and felt.pins.buttons[2].afkrydset == false)
+felt.opacity:SetValue(70)
+kor(1)
+tjek("skyderen sætter opacity og virker med det samme", D2MapDB.opacity == 70 and taet(canvas.alfa, 0.70))
+felt.span:SetValue(770)
+tjek("zoom-skyderen holder sig til trin på 50", D2MapDB.span == 750 or D2MapDB.span == 800, D2MapDB.span)
+felt.pinScale:SetValue(1.5)
+tjek("pin-skyderen", taet(D2MapDB.pinScale, 1.5))
+felt.terrain:Klik()
+kor(0.2)
+tjek("afkrydsning slår terrænet fra", D2MapDB.terrain == false and #fliser() == 0)
+felt.terrain:Klik()
+felt.pins.buttons[2]:Klik()
+tjek("valg af Objectives", D2MapDB.pins == "objectives" and felt.pins.buttons[2].afkrydset == true
+    and felt.pins.buttons[1].afkrydset == false)
+felt.pins.buttons[2]:Klik()
+tjek("klik på det valgte igen ændrer ingenting", D2MapDB.pins == "objectives" and felt.pins.buttons[2].afkrydset == true)
+felt.shape.buttons[2]:Klik()
+kor(0.2)
+tjek("valg af Square skifter maske", D2MapDB.shape == "square" and fliser()[1].maske.tekstur:find("mask%-square") ~= nil)
+felt.locked:Klik()
+tjek("Unlock to move slår mus til", D2MapDB.locked == false and root.mus == true and felt.locked.afkrydset == true)
+felt.locked:Klik()
+tjek("…og fra igen = click-through", D2MapDB.locked == true and root.mus == false)
+felt.enabled:Klik()
+tjek("Show automap skjuler automappet, vinduet bliver", root.synlig == false and vindue.synlig == true)
+slash("toggle")
+tjek("en kommando opdaterer vinduet", root.synlig == true and felt.enabled.afkrydset == true)
+slash("opacity 25")
+tjek("…også skyderne", felt.opacity.vaerdi == 25)
+D2Map_Zoom(-1)
+tjek("…og genvejene", felt.span.vaerdi == D2MapDB.span)
+slash("")
+tjek("/d2map igen lukker vinduet", vindue.synlig == false)
+slash("options")
+tjek("/d2map options åbner det også", vindue.synlig == true)
+slash("reset")
+tjek("Reset sætter felterne tilbage", felt.opacity.vaerdi == 40 and felt.shape.buttons[1].afkrydset == true
+    and felt.terrain.afkrydset == false)
+slash("terrain on")
+slash("")
 
 print("Uden position og med hemmelige værdier")
 spiller.hemmelig = true
@@ -398,16 +488,24 @@ tjek("/d2map bind ctrl-n", bindinger["CTRL-N"] == "D2MAP_TOGGLE")
 
 print("Nulstilling og gemte indstillinger")
 slash("reset")
-tjek("/d2map reset", D2MapDB.opacity == 40 and D2MapDB.span == 500 and D2MapDB.bindingOffered == true)
+tjek("/d2map reset", D2MapDB.opacity == 40 and D2MapDB.span == 500 and D2MapDB.bindingOffered == true
+    and D2MapDB.terrain == false)
 -- En ødelagt SavedVariables-fil: indlæs addon'en forfra og se, at den retter op.
 D2MapDB.opacity = "vrøvl"
 D2MapDB.size = 99999
 D2MapDB.shape = "trekant"
 D2MapDB.span = 432.7
+D2MapDB.terrain = true
+D2MapDB.settingsVersion = nil                          -- gemt af den første udgave
 assert(loadfile("D2Map/D2Map.lua"))("D2Map", ns)
 rammer[#rammer].scripts.OnEvent(rammer[#rammer], "ADDON_LOADED", "D2Map")
 tjek("forkerte gemte værdier rettes ved indlæsning", D2MapDB.opacity == 40 and D2MapDB.size == 1400
     and D2MapDB.shape == "round" and D2MapDB.span == 433)
+tjek("den første udgaves gemte «terræn til» slås fra én gang", D2MapDB.terrain == false and D2MapDB.settingsVersion == 2)
+D2MapDB.terrain = true                                 -- slået til igen af brugeren
+assert(loadfile("D2Map/D2Map.lua"))("D2Map", ns)
+rammer[#rammer].scripts.OnEvent(rammer[#rammer], "ADDON_LOADED", "D2Map")
+tjek("…og et senere «terræn til» bliver stående", D2MapDB.terrain == true)
 
 print(("\n%d af %d tjek bestod"):format(antal - fejl, antal))
 os.exit(fejl == 0 and 0 or 1)

@@ -7,12 +7,17 @@ bevægelse og targeting går lige igennem.
 
 ```sh
 ./installer.sh        # kopierer D2Map/ ind i spillets AddOns-mappe
-lua test/koer.lua     # 63 tjek mod en attrap af WoW's API
+lua test/koer.lua     # 89 tjek mod en attrap af WoW's API
 ```
 
 Første gang skal spillet genstartes helt; derefter er `/reload` nok.
 
 ## Brug
+
+**`/d2map` åbner indstillingsvinduet** (Lars' ønske: «det gider jeg ikke» om
+kommandoer). Afkrydsningsfelter, skydere og valg for alt herunder; alt virker
+med det samme, Escape lukker. Kommandoerne findes stadig og holder vinduet
+ajour:
 
 | Kommando | Hvad |
 |---|---|
@@ -26,7 +31,7 @@ Første gang skal spillet genstartes helt; derefter er `/reload` nok.
 | `/d2map pins <all\|objectives\|off>` | Alle Questies pins, kun mål og afleveringer, eller ingen |
 | `/d2map pinsize <0.5-3>` | Størrelse på pins |
 | `/d2map edge <on\|off>` | Nærmeste pin for hver quest vises på kanten, når den ligger uden for |
-| `/d2map terrain <on\|off>` | Minimap-fliserne |
+| `/d2map terrain <on\|off>` | Minimap-fliserne (**fra som standard**: kun pins og pilen) |
 | `/d2map source <auto\|questie\|blizzard>` | Hvor pins kommer fra |
 | `/d2map bind [tast]` | Læg en tast på toggle (Alt+M, hvis ingen nævnes) |
 | `/d2map unlock` / `lock` | Flyt rammen med musen (hjulet zoomer); låst = click-through |
@@ -45,7 +50,7 @@ Indstillingerne gemmes pr. figur i `D2MapDB`.
 | Fil | Indhold |
 |---|---|
 | `D2Map/D2Map.toc` | Metadata, `SavedVariablesPerCharacter: D2MapDB`, Questie som valgfri afhængighed |
-| `D2Map/D2Map.lua` | Hele addon'en, delt i 11 afsnit (defaults, koordinater, rammer, terræn, adaptere, pins, fading, løkke, kommandoer, events) |
+| `D2Map/D2Map.lua` | Hele addon'en, delt i 13 afsnit (defaults, koordinater, rammer, terræn, adaptere, pins, fading, løkke, `Set()`, indstillingsvindue, kommandoer, events) |
 | `D2Map/Bindings.xml` | De tre tastaturgenveje |
 | `D2Map/Data/MinimapTiles.lua` | Fil-id'er for minimap-fliserne. **Genereret** af `scripts/byg-fliser.lua` |
 | `D2Map/Media/mask-*.tga` | Maskerne til de bløde kanter. **Genereret** af `scripts/byg-masker.py` |
@@ -81,6 +86,17 @@ Indstillingerne gemmes pr. figur i `D2MapDB`.
   gennemsigtigheden glider derhen på 0,35 sekund. Pins er dobbelt så synlige som
   terrænet (`pinBoost`).
 
+- **Én vej ind.** Vinduet, kommandoerne og genvejene sætter alle værdier gennem
+  `Set(key, value)` (afsnit 10), som klipper til intervallet, gør det, ændringen
+  kræver (`AFTER`), og opdaterer vinduet. Ny indstilling = en linje i
+  `DEFAULTS`, evt. en i `AFTER`, og et felt i `CreateOptions`.
+- **Vinduet** bruger kun skabeloner, andre Forever-addons bruger i dag
+  (`BasicFrameTemplateWithInset`, `UICheckButtonTemplate`,
+  `OptionsSliderTemplate`, `UIPanelButtonTemplate`); testens attrap afviser alle
+  andre.
+- **Ændrede standarder** for figurer med gemte indstillinger går gennem
+  `MigrateSettings` og `settingsVersion` (version 2: terræn fra).
+
 ## En anden kilde til pins (fx pfQuest)
 
 Forever er en moderne klient, så det er Questie, der gælder her; pfQuest kører
@@ -101,15 +117,12 @@ D2Map.RegisterAdapter("pfquest", {
 På en 1.12-klient skal `PlayerPosition` og `ZoneToWorld` i afsnit 3 også
 skiftes ud (ingen `C_Map`), og fliserne skal hentes med sti i stedet for fil-id.
 
-## Ikke afprøvet i spillet endnu
+## Afprøvet i spillet
 
-Testen viser, at logikken holder (placering, kant-pins, fading, kommandoer,
-hemmelige værdier). Den kan ikke vise, hvordan det ser ud. Det, der først ses i
-spillet:
-
-- om maskerne giver bløde kanter (ellers: `/d2map shape plain`),
-- om `UnitPosition` er hemmelig i combat (så er automappet tomt i combat),
-- om Questies ikoner får rigtigt billede og farve.
+Lars' skærmbillede 2026-11-11 (version 1.0): terræn, bløde runde kanter,
+Questies pins og spillerens pil virker. Indstillingsvinduet (1.1) er ikke set i
+spillet endnu, og det er heller ikke afklaret, om `UnitPosition` er hemmelig i
+combat (så er automappet tomt i combat).
 
 Lua-fejl står i `_forever_/Logs/General.log` (`[E][Lua]`), også uden fejlvisning
 slået til. Sker der en fejl i opdateringsløkken, skriver addon'en den én gang i
