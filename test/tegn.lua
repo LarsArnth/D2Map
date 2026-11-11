@@ -47,8 +47,8 @@ local function scenarie(navn, punkter, span)
     local f = io.open(mappe .. "/" .. navn .. ".svg", "w") f:write(table.concat(ud, "\n")) f:close()
     SlashCmdList.D2MAP("status")
     for i = #chat, 1, -1 do                                -- statuslinjen om formerne
-        if chat[i]:find("outlines: ", 1, true) then
-            print(navn .. ": " .. chat[i]:gsub("^.-outlines: on, ", ""))
+        if chat[i]:find("pull routes: ", 1, true) then
+            print(navn .. ": " .. chat[i]:gsub("^.-pull routes: on, ", ""))
             break
         end
     end

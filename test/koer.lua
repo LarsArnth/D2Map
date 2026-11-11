@@ -219,6 +219,7 @@ tjek("defaults fyldes ud", D2MapDB.opacity == 0 and D2MapDB.combatOpacity == 21 
 tjek("standard: synlig i bevægelse (54 %), ingen combat-toning", D2MapDB.moveFade == true and D2MapDB.moveOpacity == 54
     and D2MapDB.combatFade == false)
 tjek("standard: 650 yards, drejer med figuren, sepia", D2MapDB.span == 650 and D2MapDB.rotate == true and D2MapDB.style == "sepia")
+tjek("standard: intet på kanten for det, der er uden for rammen", D2MapDB.edgePins == false)
 tjek("terræn er slået fra som standard", D2MapDB.terrain == false)
 fyr("PLAYER_LOGIN")
 fyr("PLAYER_ENTERING_WORLD")
@@ -228,7 +229,7 @@ fyr("PLAYER_ENTERING_WORLD")
 -- tjekkene ikke skal skrives om, hver gang en standard ændres.
 local function grundlag()
     for _, kommando in ipairs({ "opacity 40", "combat 18", "combat on", "moving 20", "moving off",
-        "zoom 500", "rotate off", "style color" }) do
+        "zoom 500", "rotate off", "style color", "rim on" }) do
         SlashCmdList.D2MAP(kommando)
     end
 end
@@ -535,6 +536,9 @@ felt.route:Klik()
 tjek("afkrydsning slår formerne fra", D2MapDB.route == false)
 felt.route:Klik()
 tjek("…og til igen", D2MapDB.route == true)
+felt.pullRange:SetValue(27)
+tjek("pull-skyderen går i trin på 5", D2MapDB.pullRange == 25 or D2MapDB.pullRange == 30, D2MapDB.pullRange)
+felt.pullRange:SetValue(40)
 felt.waypoint:Klik()
 tjek("afkrydsning slår guidens vej fra", D2MapDB.waypoint == false)
 felt.waypoint:Klik()
@@ -623,43 +627,60 @@ local function saet(...)
     end
     kor(1.2)
 end
--- Hvilken form ligger målet i (nummer), og hvor langt er der til kanten?
-local function formMed(m)
+-- Den rute, der ligger nærmest målet (nummer), og afstanden til den i yards.
+local function naermeste(m)
+    local bedst, bedstAfstand
     for nr, form in ipairs(former()) do
-        if indeni(form, m[2] * px, m[1] * px) then return nr, afstand(form, m[2] * px, m[1] * px) end
+        local a = afstand(form, m[2] * px, m[1] * px) / px
+        if not bedstAfstand or a < bedstAfstand then bedst, bedstAfstand = nr, a end
     end
+    return bedst, bedstAfstand or math.huge
 end
-local function alleI(liste, nr, mindstAfstand)
+-- Kan alle mål i listen pulles fra rute nr? (pull-afstand + lidt slæk til de bløde hjørner)
+local function kanPulles(liste, nr, raekkevidde)
     for _, m in ipairs(liste) do
-        local i, a = formMed(m)
-        if i ~= nr or a < mindstAfstand then return false end
+        local i, a = naermeste(m)
+        if (nr and i ~= nr) or a > raekkevidde + 8 then return false, a end
     end
     return true
 end
+local function omkreds(form)
+    local sum, j = 0, #form
+    for i = 1, #form do
+        sum = sum + math.sqrt((form[i].x - form[j].x) ^ 2 + (form[i].y - form[j].y) ^ 2)
+        j = i
+    end
+    return sum / px
+end
+tjek("standard: pull-afstand 40 yards", D2MapDB.pullRange == 40)
+
+-- To små lejre (ca. 75 yards på tværs): alt kan pulles fra ét sted i midten.
 saet(lejr1, lejr2, { enlig })
 local f = former()
-tjek("to lejre giver to former", #f == 2, #f)
-tjek("formerne er lukkede kurver", f[1] and f[1].lukket and f[2] and f[2].lukket)
-local nr1, nr2 = formMed(lejr1[1]), formMed(lejr2[1])
-tjek("hver lejr har sin egen form", nr1 and nr2 and nr1 ~= nr2)
-tjek("alle lejrens mål ligger inden i formen, et stykke fra kanten", alleI(lejr1, nr1, 5) and alleI(lejr2, nr2, 5))
-tjek("det enlige mål får ingen form", formMed(enlig) == nil)
-tjek("formerne er bløde: mange korte stykker", #f[1] >= 24 and #f[2] >= 24, #f[1])
+tjek("to lejre giver to ruter", #f == 2, #f)
+tjek("ruterne er lukkede kurver", f[1] and f[1].lukket and f[2] and f[2].lukket)
+local nr1, nr2 = naermeste(lejr1[1]), naermeste(lejr2[1])
+tjek("hver lejr har sin egen rute", nr1 and nr2 and nr1 ~= nr2)
+tjek("alle lejrens mål kan pulles fra ruten", kanPulles(lejr1, nr1, 40) and kanPulles(lejr2, nr2, 40))
+tjek("en lille lejr bliver til ét sted: en lille ring i midten", omkreds(f[nr1]) < 60 and #f[nr1] == 24
+    and indeni(f[nr1], 25 * px, 85 * px), omkreds(f[nr1]))
+tjek("det enlige mål får ingen rute", select(2, naermeste(enlig)) > 100)
 
 local foer = linjer()[1].til.y
 spiller.nord = spiller.nord + 10
 kor(0.12)
-tjek("formerne flytter sig med spilleren", taet(linjer()[1].til.y, foer - 10 * px))
+tjek("ruterne flytter sig med spilleren", taet(linjer()[1].til.y, foer - 10 * px))
 spiller.nord = spiller.nord - 10
 kor(0.12)
 
-local nyt = { -100, -60 }                               -- en mob mere ved den sydvestlige lejr
-tjek("et nyt mål ligger uden for formen …", formMed(nyt) == nil)
+local nyt = { -100, -30 }                               -- en mob mere ved den sydvestlige lejr
+tjek("et nyt mål kan ikke pulles fra den gamle rute …", select(2, naermeste(nyt)) > 48)
 saet(lejr1, lejr2, { enlig, nyt })
-tjek("… til formen er regnet om og tager det med", formMed(nyt) == formMed(lejr2[1]) and formMed(nyt) ~= nil)
+tjek("… men fra den nye, når ruten er regnet om", kanPulles({ nyt }, naermeste(lejr2[1]), 40) and kanPulles(lejr2, nil, 40),
+    select(2, naermeste(nyt)))
 
 local antalFoer = #linjer()
-slash("zoom 320")                                      -- lejr 2 stikker nu ud over kanten
+slash("zoom 320")                                      -- den sydvestlige lejr ligger nu uden for rammen
 kor(1.2)
 local yderst = 0
 for _, l in ipairs(linjer()) do
@@ -668,12 +689,45 @@ end
 tjek("stykker uden for rammen tegnes ikke", #linjer() > 0 and #linjer() < antalFoer and yderst <= 280 * 0.90 + 0.01, yderst)
 slash("zoom 500")
 
-saet({ { 0, 60 }, { 0, 120 }, { 0, 180 } })            -- tre mål på én linje mod øst
+-- En stor ring af mål (radius 120 yards): ruten skal ligge inde i ringen.
+local ring = {}
+for i = 1, 10 do
+    local v = i / 10 * 2 * math.pi
+    ring[i] = { math.sin(v) * 120, math.cos(v) * 120 }
+end
+saet(ring)
 f = former()
-tjek("mål på én linje får en smal form om linjen", #f == 1 and f[1].lukket
-    and indeni(f[1], 60 * px, 0) and indeni(f[1], 120 * px, 0) and indeni(f[1], 180 * px, 0))
+local yderstYards, inderstYards = 0, math.huge
+for _, punkt in ipairs(f[1] or {}) do
+    local r = math.sqrt(punkt.x ^ 2 + punkt.y ^ 2) / px
+    yderstYards, inderstYards = math.max(yderstYards, r), math.min(inderstYards, r)
+end
+tjek("en stor klynge: ruten ligger inde i klyngen, ikke uden om", #f == 1 and yderstYards < 95 and inderstYards > 60,
+    yderstYards .. " / " .. inderstYards)
+tjek("…alle de yderste mål kan stadig pulles", kanPulles(ring, 1, 40))
+tjek("…og den er kortere end at løbe rundt om dem", omkreds(f[1]) < 2 * math.pi * 120 * 0.75, omkreds(f[1]))
 
--- En bue af mål: formen skal følge buen, ikke spænde over hullet i midten.
+local midt = { 0, 0 }                                  -- en mob midt i ringen: 80 yards fra ruten
+saet(ring, { midt })
+tjek("et mål midt i klyngen får ruten til at slå et slag ind", kanPulles({ midt }, 1, 40) and kanPulles(ring, 1, 40),
+    select(2, naermeste(midt)))
+
+slash("pull 0")
+saet(ring)
+tjek("/d2map pull 0: ruten går gennem de yderste mål", kanPulles(ring, 1, 0) and D2MapDB.pullRange == 0)
+slash("pull 60")
+saet(ring)
+f = former()
+tjek("/d2map pull 60: ruten trækker sig længere ind", #f == 1 and omkreds(f[1]) < 2 * math.pi * 75 and kanPulles(ring, 1, 60),
+    f[1] and omkreds(f[1]))
+slash("pull 40")
+
+saet({ { 0, 60 }, { 0, 120 }, { 0, 180 }, { 0, 240 } }) -- fire mål på én linje mod øst
+f = former()
+tjek("mål på én linje: ruten er en streg langs linjen, kortere i begge ender", #f == 1 and f[1].lukket
+    and kanPulles(maal, 1, 40) and omkreds(f[1]) < 2 * 120, f[1] and omkreds(f[1]))
+
+-- En bue af mål: ruten skal følge buen på indersiden.
 local bue = {}
 for i = 0, 12 do
     local v = math.pi * (0.1 + 0.8 * i / 12)
@@ -681,18 +735,18 @@ for i = 0, 12 do
 end
 saet(bue)
 f = former()
-tjek("en bue af mål giver én form med alle mål i", #f == 1 and alleI(bue, 1, 3))
-tjek("…som følger buen i stedet for at dække hullet under den", #f == 1 and not indeni(f[1], 0, 20 * px))
+tjek("en bue af mål giver én rute, hvorfra alle kan pulles", #f == 1 and kanPulles(bue, 1, 40))
+tjek("…og den spænder ikke over hullet under buen", #f == 1 and not indeni(f[1], 0, -20 * px))
 
 saet({ { 40, 40 }, { 70, 60 } })
-tjek("to mål alene giver ingen form", #linjer() == 0)
+tjek("to mål alene giver ingen rute", #linjer() == 0)
 saet(lejr1)
 slash("outlines off")
 kor(0.2)
 tjek("/d2map outlines off", #linjer() == 0)
 slash("route on")
 kor(1.2)
-tjek("/d2map route on (det gamle navn virker også)", #former() == 1)
+tjek("/d2map route on", #former() == 1)
 
 print("Guidens vej (Factoruide)")
 saet({})                                               -- ingen mål: kun vejen
@@ -726,6 +780,12 @@ maerke = maalmaerke()
 tjek("et mål uden for rammen: stregen løber ud til kanten", #prikker() == 27 and prikVed(247, 0) and prikVed(13, 0), #prikker())
 tjek("…og et mindre mærke på kanten viser retningen", maerke and taet(maerke.punkter.CENTER.x, 252) and taet(maerke.punkter.CENTER.y, 0)
     and maerke.bredde == 10)
+slash("rim off")
+kor(0.3)
+tjek("/d2map rim off: mærket på kanten er væk, stregen bliver", maalmaerke() == nil and #prikker() == 27, #prikker())
+slash("rim on")
+kor(0.3)
+tjek("/d2map rim on: mærket er tilbage", maalmaerke() ~= nil)
 
 -- En vej med et knæk: 100 yards øst, så 100 yards nord.
 vej = function(n, w) return { { n, w }, { udgangsNord, udgangsVest - 100 }, { udgangsNord + 100, udgangsVest - 100 } } end
@@ -840,7 +900,8 @@ print("Nulstilling og gemte indstillinger")
 slash("reset")
 tjek("/d2map reset", D2MapDB.opacity == 0 and D2MapDB.span == 650 and D2MapDB.bindingOffered == true
     and D2MapDB.terrain == false and D2MapDB.route == true and D2MapDB.rotate == true and D2MapDB.waypoint == true
-    and D2MapDB.moveFade == true and D2MapDB.moveOpacity == 54 and D2MapDB.combatFade == false)
+    and D2MapDB.moveFade == true and D2MapDB.moveOpacity == 54 and D2MapDB.combatFade == false
+    and D2MapDB.pullRange == 40 and D2MapDB.edgePins == false)
 -- Med standarderne: usynlig når man står stille, synlig når man går.
 kor(1)
 tjek("standard: usynligt, når man står stille", taet(canvas.alfa, 0) and taet(pinLayer.alfa, 0), canvas.alfa)
@@ -860,11 +921,17 @@ assert(loadfile("D2Map/D2Map.lua"))("D2Map", ns)
 rammer[#rammer].scripts.OnEvent(rammer[#rammer], "ADDON_LOADED", "D2Map")
 tjek("forkerte gemte værdier rettes ved indlæsning", D2MapDB.opacity == 0 and D2MapDB.size == 1400
     and D2MapDB.shape == "round" and D2MapDB.span == 433)
-tjek("den første udgaves gemte «terræn til» slås fra én gang", D2MapDB.terrain == false and D2MapDB.settingsVersion == 2)
+tjek("den første udgaves gemte «terræn til» slås fra én gang", D2MapDB.terrain == false and D2MapDB.settingsVersion == 3)
 D2MapDB.terrain = true                                 -- slået til igen af brugeren
+D2MapDB.edgePins = true
 assert(loadfile("D2Map/D2Map.lua"))("D2Map", ns)
 rammer[#rammer].scripts.OnEvent(rammer[#rammer], "ADDON_LOADED", "D2Map")
 tjek("…og et senere «terræn til» bliver stående", D2MapDB.terrain == true)
+tjek("…ligesom kant-mærker, man selv har slået til", D2MapDB.edgePins == true)
+D2MapDB.settingsVersion = 2                            -- gemt af version 1.1-1.5 med kant-mærker til
+assert(loadfile("D2Map/D2Map.lua"))("D2Map", ns)
+rammer[#rammer].scripts.OnEvent(rammer[#rammer], "ADDON_LOADED", "D2Map")
+tjek("gemte kant-mærker fra før 1.6 slås fra én gang", D2MapDB.edgePins == false and D2MapDB.settingsVersion == 3)
 
 print(("\n%d af %d tjek bestod"):format(antal - fejl, antal))
 os.exit(fejl == 0 and 0 or 1)

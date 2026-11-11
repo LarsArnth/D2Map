@@ -53,8 +53,10 @@ local DEFAULTS = {
     pins           = "all",    -- all | objectives | off
     pinScale       = 1.0,      -- størrelsesfaktor for pins
     pinBoost       = 2.0,      -- pins er så mange gange mere synlige end terrænet
-    edgePins       = true,     -- vis nærmeste pin for hver quest på kanten, når den er uden for
-    route          = true,     -- tegn en blød form om hver klynge af quest-mål
+    edgePins       = false,    -- vis det, der ligger uden for rammen, som mærker på kanten:
+                               -- nærmeste pin for hver quest, og guidens mål
+    route          = true,     -- tegn en pull-rute gennem hver klynge af quest-mål
+    pullRange      = 40,       -- yards: så langt fra de yderste mål må ruten ligge (0 = gennem dem)
     rotate         = true,     -- drej kortet, så det, figuren ser mod, er opad (ellers nord opad)
     waypoint       = true,     -- vis guidens vej (fx Factoruides grønne prikkede streg)
     source         = "auto",   -- auto | questie | blizzard (hvilken adapter)
@@ -66,7 +68,7 @@ local DEFAULTS = {
     pinSyncInterval = 1.0,     -- sekunder mellem at pins hentes fra adapteren
     maxPins        = 200,      -- loft over pins tegnet på én gang
     bindingOffered = false,    -- har vi prøvet at lægge Alt+M på toggle?
-    settingsVersion = 2,       -- se MigrateSettings
+    settingsVersion = 3,       -- se MigrateSettings
 }
 
 -- Tilladte intervaller for de tal, brugeren kan sætte.
@@ -74,13 +76,14 @@ local LIMITS = {
     opacity       = { 0, 100 },
     combatOpacity = { 0, 100 },
     moveOpacity   = { 0, 100 },
+    pullRange     = { 0, 60 },
     size          = { 200, 1400 },
     span          = { 150, 2000 },
     pinScale      = { 0.5, 3 },
 }
 
 -- Disse gemmes som hele tal (procent, pixels, yards).
-local WHOLE = { opacity = true, combatOpacity = true, moveOpacity = true, size = true, span = true }
+local WHOLE = { opacity = true, combatOpacity = true, moveOpacity = true, size = true, span = true, pullRange = true }
 
 local SHAPES = { round = true, square = true, plain = true }
 local PIN_MODES = { all = true, objectives = true, off = true }
@@ -156,6 +159,10 @@ local function MigrateSettings()
     -- Version 2: terrænet er slået fra som standard. Den første udgave gemte
     -- "til" hos alle, så det rettes én gang; slår man det til igen, bliver det.
     if version < 2 then db.terrain = false end
+    -- Version 3: mærkerne på kanten for det, der ligger uden for rammen, er
+    -- slået fra som standard (Lars, 2026-11-11: «ikke vise alle de ting der er
+    -- out of range»). Fluebenet i vinduet slår dem til igen.
+    if version < 3 then db.edgePins = false end
     db.settingsVersion = DEFAULTS.settingsVersion
 end
 
@@ -838,23 +845,25 @@ local function UpdatePins(continent, north, west)
 end
 
 --------------------------------------------------------------------------------
--- 8. Former om klyngerne af quest-mål
+-- 8. Pull-ruter gennem klyngerne af quest-mål
 --
--- I stedet for en streg, der rammer hver mob, tegnes en blød, lukket form om
--- hver klynge af mål: «her er området – løb rundt i det». Enlige mål får ingen
--- form; de har deres pin. Fire trin:
+-- For hver klynge af mål tegnes en blød, lukket rute INDE i klyngen: den korteste
+-- runde, hvorfra alle klyngens mål kan pulles. Man skal ikke hen til hver mob,
+-- kun inden for pull-afstand (Lars, 2026-11-11: «jeg skal bare være i 30-50
+-- yards afstand til det yderste punkt»). Enlige mål får ingen rute; de har
+-- deres pin. Fire trin:
 --   1. Klynger: mål, der ligger tættere end en «lænkeafstand», hører sammen
 --      (og dermed også deres naboers naboer). Afstanden er det dobbelte af
 --      den typiske afstand til nærmeste nabo (mindst 60, højst 150 yards), så
 --      det passer både til tætte og spredte pins.
 --   2. Omrids: den konvekse skal om klyngen (som en elastik om søm).
---   3. Indhak: en lang kant graves ind til det nærmeste mål bag den, så formen
+--   3. Indhak: en lang kant graves ind til det nærmeste mål bag den, så omridset
 --      følger klyngen i stedet for at spænde over tomme områder.
---   4. Blødgøring: hjørnerne skæres af et par gange (Chaikin), så omridset
---      bliver en jævn kurve. Hvert hjørne flyttes først så meget, at kurven
---      ender en halv snes yards uden om målet – ikke igennem det.
+--   4. Sammentrækning: omridset trækkes sammen som en elastik, hvor hvert hjørne
+--      er bundet til sit mål med en snor på pull-afstanden (se PullLoop), og
+--      hjørnerne skæres til sidst af (Chaikin), så ruten bliver en jævn kurve.
 --
--- Formerne ligger fast i verden og afhænger ikke af, hvor spilleren står. De
+-- Ruterne ligger fast i verden og afhænger ikke af, hvor spilleren står. De
 -- regnes derfor kun om, når målene ændrer sig, eller spilleren har flyttet sig
 -- et godt stykke – ikke hvert sekund.
 --------------------------------------------------------------------------------
@@ -872,8 +881,11 @@ local LOOP_LINK_FACTOR = 2         -- lænkeafstand = så mange gange den typisk
 local LOOP_LINK_MIN = 60           -- … men inden for disse grænser (yards)
 local LOOP_LINK_MAX = 150
 local LOOP_DIG_RATIO = 2           -- grav ind, når kanten er så mange gange længere end dybden
-local LOOP_MARGIN_YARDS = 12       -- så langt uden om de yderste mål går den færdige form
-local LOOP_MAX_PUSH = 70           -- et hjørne flyttes højst så langt for at opnå det
+local LOOP_REACH_SLACK = 3         -- så meget længere væk end pull-afstanden må et mål ligge
+local LOOP_MAX_DETOURS = 30        -- højst så mange mål inde i klyngen får deres eget slag på ruten
+local LOOP_CORNER_YARDS = 30       -- hjørner rundes over højst så mange yards af hver kant
+local LOOP_SPOT_YARDS = 20         -- en rute mindre end det er ét sted: «stil dig her»
+local LOOP_SPOT_RADIUS = 8         -- … og tegnes som en ring med den radius
 local LOOP_MAX_LINES = 400         -- loft over linjestykker tegnet på én gang
 
 local loopNorth, loopWest = {}, {} -- alle formers punkter efter hinanden (verdenskoordinater)
@@ -884,7 +896,7 @@ local loopLines = {}               -- genbrugte linjer
 local loopLinesShown = 0
 
 -- Hvad formerne sidst blev regnet ud fra.
-local builtSignature, builtContinent, builtNorth, builtWest, builtSpan
+local builtSignature, builtContinent, builtNorth, builtWest, builtSpan, builtPull
 
 -- Målene, der regnes på: x mod øst, y mod nord (yards).
 local pointX, pointY, pointDist, pointOrder = {}, {}, {}, {}
@@ -978,52 +990,128 @@ local function DigHull(hull, members, link)
     end
 end
 
--- Gør omridset til en blød form. Returnerer to lister (x og y) med formens punkter.
+-- Afstanden fra (x, y) til den lukkede kurve gennem punkterne (xs, ys).
+local function LoopDistance(x, y, xs, ys)
+    local best, n = nil, #xs
+    for i = 1, n do
+        local j = i % n + 1
+        local ax, ay = xs[i], ys[i]
+        local dx, dy = xs[j] - ax, ys[j] - ay
+        local length = dx * dx + dy * dy
+        local t = length > 0 and Clamp(((x - ax) * dx + (y - ay) * dy) / length, 0, 1) or 0
+        local ex, ey = x - ax - t * dx, y - ay - t * dy
+        local d = ex * ex + ey * ey
+        if not best or d < best then best = d end
+    end
+    return sqrt(best)
+end
+
+-- Gør omridset til pull-ruten. Returnerer to lister (x og y) med rutens punkter.
 --
--- Chaikins hjørneskæring ender i en kurve, der ved hjørnet V med naboerne A og
--- B går gennem (A + 6V + B) / 8 – altså et stykke inden for V, og mere jo
--- spidsere hjørnet og jo længere kanterne er. Skal kurven i stedet gå gennem
--- V + margen · n (n = retningen udad), må hjørnet flyttes til
---     V' = V + 4/3 · margen · n + (2V - A - B) / 6
--- (naboernes egen flytning er ikke regnet med; det er tæt nok).
-local function SmoothOutline(hull)
-    local xs, ys = {}, {}
-    local count = #hull
-    if count < 3 then
-        -- Alle mål på én linje: en smal kasse om linjen.
-        local a, b = hull[1], hull[count]
-        local dx, dy = pointX[b] - pointX[a], pointY[b] - pointY[a]
-        local length = max(sqrt(dx * dx + dy * dy), 1)
-        local ux, uy = dx / length * LOOP_MARGIN_YARDS, dy / length * LOOP_MARGIN_YARDS
-        xs = { pointX[a] - ux + uy, pointX[b] + ux + uy, pointX[b] + ux - uy, pointX[a] - ux - uy }
-        ys = { pointY[a] - uy - ux, pointY[b] + uy - ux, pointY[b] + uy + ux, pointY[a] - uy + ux }
-    else
-        -- Skallen står mod uret, og indhakkene ændrer ikke på det. Så peger
-        -- (dy, -dx) udad for hver kant – også på tilbagevejen i et bånd, hvor
-        -- kanten løber modsat og normalen derfor vender til den anden side.
-        local sign = 1
-        for i = 1, count do
-            local before, here, after = hull[(i - 2) % count + 1], hull[i], hull[i % count + 1]
-            -- Udadrettede normaler på de to kanter, der mødes i hjørnet.
-            local ax, ay = pointY[here] - pointY[before], pointX[before] - pointX[here]
-            local bx, by = pointY[after] - pointY[here], pointX[here] - pointX[after]
-            local al, bl = max(sqrt(ax * ax + ay * ay), 0.001), max(sqrt(bx * bx + by * by), 0.001)
-            local nx, ny = ax / al + bx / bl, ay / al + by / bl
-            local nl = sqrt(nx * nx + ny * ny)
-            if nl < 0.001 then nx, ny, nl = ax / al, ay / al, 1 end
-            local push = 4 / 3 * LOOP_MARGIN_YARDS * sign / nl
-            local mx = push * nx + (2 * pointX[here] - pointX[before] - pointX[after]) / 6
-            local my = push * ny + (2 * pointY[here] - pointY[before] - pointY[after]) / 6
-            local moved = sqrt(mx * mx + my * my)
-            if moved > LOOP_MAX_PUSH then mx, my = mx / moved * LOOP_MAX_PUSH, my / moved * LOOP_MAX_PUSH end
-            xs[i], ys[i] = pointX[here] + mx, pointY[here] + my
+-- Tænk på omridset som en elastik, hvor hvert hjørne er bundet til sit mål med
+-- en snor på pull-afstanden. Elastikken trækker sig sammen (hvert hjørne søger
+-- midt mellem sine naboer), til snorene strammer: så er ruten så kort, den kan
+-- blive, mens hvert yderste mål stadig kan pulles fra den. Ligger et mål inde
+-- i klyngen længere fra ruten end pull-afstanden, får det sit eget hjørne og
+-- sin egen snor, og elastikken slår et slag ind forbi det.
+--
+-- En lille klynge trækker sig helt sammen til ét punkt – «stil dig her og pull
+-- det hele» – og tegnes som en lille ring.
+local function PullLoop(hull, members)
+    local reach = db.pullRange
+    local xs, ys, owner = {}, {}, {}
+    for i, p in ipairs(hull) do
+        xs[i], ys[i], owner[i] = pointX[p], pointY[p], p
+    end
+
+    local function Tighten()
+        for _ = 1, 200 do
+            local n, moved = #xs, 0
+            for i = 1, n do
+                local a, b = (i - 2) % n + 1, i % n + 1
+                local x, y = (xs[a] + xs[b]) / 2, (ys[a] + ys[b]) / 2
+                -- Snoren: højst pull-afstanden fra hjørnets eget mål.
+                local dx, dy = x - pointX[owner[i]], y - pointY[owner[i]]
+                local d = sqrt(dx * dx + dy * dy)
+                if d > reach then
+                    x, y = pointX[owner[i]] + dx / d * reach, pointY[owner[i]] + dy / d * reach
+                end
+                moved = max(moved, abs(x - xs[i]), abs(y - ys[i]))
+                xs[i], ys[i] = x, y
+            end
+            if moved < 0.05 then break end
+        end
+    end
+    Tighten()
+
+    -- Mål, ruten ikke når (typisk midt i en stor klynge), kommer med ét ad
+    -- gangen: det fjerneste først, sat ind hvor det forlænger ruten mindst.
+    if reach > 0 then
+        for _ = 1, LOOP_MAX_DETOURS do
+            local worst, worstDist = nil, reach + LOOP_REACH_SLACK
+            for _, p in ipairs(members) do
+                local d = LoopDistance(pointX[p], pointY[p], xs, ys)
+                if d > worstDist then worst, worstDist = p, d end
+            end
+            if not worst then break end
+            local wx, wy = pointX[worst], pointY[worst]
+            local bestAt, bestAdded
+            local n = #xs
+            for i = 1, n do
+                local j = i % n + 1
+                local added = sqrt((xs[i] - wx) ^ 2 + (ys[i] - wy) ^ 2) + sqrt((xs[j] - wx) ^ 2 + (ys[j] - wy) ^ 2)
+                    - sqrt((xs[i] - xs[j]) ^ 2 + (ys[i] - ys[j]) ^ 2)
+                if not bestAdded or added < bestAdded then bestAt, bestAdded = i, added end
+            end
+            table.insert(xs, bestAt + 1, wx)
+            table.insert(ys, bestAt + 1, wy)
+            table.insert(owner, bestAt + 1, worst)
+            Tighten()
         end
     end
 
-    -- Chaikin: hver kant bliver til to punkter, ¼ og ¾ henne. Tre runder giver
-    -- en jævn kurve; store omrids nøjes med to.
-    for _ = 1, (#xs > 10 and 2 or 3) do
-        local nx, ny, n = {}, {}, #xs
+    -- Trukket sammen til (næsten) et punkt: tegn en lille ring om det.
+    local minX, maxX, minY, maxY = xs[1], xs[1], ys[1], ys[1]
+    for i = 2, #xs do
+        minX, maxX = min(minX, xs[i]), max(maxX, xs[i])
+        minY, maxY = min(minY, ys[i]), max(maxY, ys[i])
+    end
+    if maxX - minX < LOOP_SPOT_YARDS and maxY - minY < LOOP_SPOT_YARDS then
+        local cx, cy = (minX + maxX) / 2, (minY + maxY) / 2
+        local ringX, ringY = {}, {}
+        for i = 1, 24 do
+            local angle = (i - 1) / 24 * 2 * math.pi
+            ringX[i], ringY[i] = cx + cos(angle) * LOOP_SPOT_RADIUS, cy + sin(angle) * LOOP_SPOT_RADIUS
+        end
+        return ringX, ringY
+    end
+
+    -- Blødgøringen (Chaikin) skærer hjørner af: kurven ender i (A + 6V + B) / 8
+    -- ved hjørnet V med naboerne A og B, altså længere fra V, jo længere kanterne
+    -- er. Med lange kanter kunne et hjørnes mål så ikke længere pulles. Derfor
+    -- får hver kant et støttepunkt tæt på hver ende: så er naboerne højst
+    -- LOOP_CORNER_YARDS væk, og kurven kommer inden for en fjerdedel af det.
+    local cx, cy, n = {}, {}, #xs
+    for i = 1, n do
+        local j = i % n + 1
+        local dx, dy = xs[j] - xs[i], ys[j] - ys[i]
+        local length = sqrt(dx * dx + dy * dy)
+        cx[#cx + 1], cy[#cy + 1] = xs[i], ys[i]
+        if length > 2 * LOOP_CORNER_YARDS then
+            local t = LOOP_CORNER_YARDS / length
+            cx[#cx + 1], cy[#cy + 1] = xs[i] + dx * t, ys[i] + dy * t
+            cx[#cx + 1], cy[#cy + 1] = xs[j] - dx * t, ys[j] - dy * t
+        elseif length > LOOP_CORNER_YARDS then
+            cx[#cx + 1], cy[#cy + 1] = xs[i] + dx / 2, ys[i] + dy / 2
+        end
+    end
+    xs, ys = cx, cy
+
+    -- Chaikin: hver kant bliver til to punkter, ¼ og ¾ henne. To runder giver
+    -- en jævn kurve; meget lange ruter nøjes med én.
+    for _ = 1, (#xs > 24 and 1 or 2) do
+        local nx, ny = {}, {}
+        n = #xs
         for i = 1, n do
             local j = i % n + 1
             nx[#nx + 1], ny[#ny + 1] = 0.75 * xs[i] + 0.25 * xs[j], 0.75 * ys[i] + 0.25 * ys[j]
@@ -1051,10 +1139,12 @@ function BuildLoops(continent, north, west)
         end
     end
     if signature == builtSignature and continent == builtContinent and db.span == builtSpan
+        and db.pullRange == builtPull
         and max(abs(north - builtNorth), abs(west - builtWest)) < db.span / 4 then
         return                                             -- intet nyt, og spilleren er ikke gået langt
     end
     builtSignature, builtContinent, builtNorth, builtWest, builtSpan = signature, continent, north, west, db.span
+    builtPull = db.pullRange
     loopCount = 0
 
     -- Mål inden for to rammebredder; så er alt i rammen med, også efter man har
@@ -1145,7 +1235,7 @@ function BuildLoops(continent, north, west)
         if #members >= LOOP_MIN_CLUSTER then
             local hull = ConvexHull(members)
             if #hull >= 3 then DigHull(hull, members, link) end
-            local xs, ys = SmoothOutline(hull)
+            local xs, ys = PullLoop(hull, members)
             loopCount = loopCount + 1
             loopStart[loopCount] = total + 1
             for i = 1, #xs do
@@ -1435,10 +1525,14 @@ function UpdatePath(continent, north, west, elapsed)
             pathGoal = pinLayer:CreateTexture(nil, "ARTWORK", nil, 4)
             pathGoal:SetTexture(PATH_DOT)
         end
-        pathGoal:SetSize(size, size)
-        pathGoal:SetVertexColor(GOAL_COLOR[1], GOAL_COLOR[2], GOAL_COLOR[3], alpha)
-        pathGoal:SetPoint("CENTER", pinLayer, "CENTER", x, y)
-        pathGoal:Show()
+        if inside or db.edgePins then
+            pathGoal:SetSize(size, size)
+            pathGoal:SetVertexColor(GOAL_COLOR[1], GOAL_COLOR[2], GOAL_COLOR[3], alpha)
+            pathGoal:SetPoint("CENTER", pinLayer, "CENTER", x, y)
+            pathGoal:Show()
+        else
+            pathGoal:Hide()                                -- uden for rammen, og kant-mærker er slået fra
+        end
     elseif pathGoal then
         pathGoal:Hide()
     end
@@ -1652,6 +1746,7 @@ local AFTER = {
     rotate   = Redraw,
     waypoint = function() RefetchPath() Redraw() end,
     route    = Resync,
+    pullRange = Resync,
     pins     = Resync,
     source   = Resync,
 }
@@ -1854,8 +1949,11 @@ local function CreateOptions()
     byKey.pinScale = MakeSlider(frame, Row(38), "pinScale", LIMITS.pinScale[1], LIMITS.pinScale[2], 0.1, function(v)
         return ("Pin size: %.1fx"):format(v)
     end)
-    byKey.edgePins = MakeCheck(frame, Row(26), "Show nearest off-map objective on the rim", "edgePins")
-    byKey.route = MakeCheck(frame, Row(26), "Outline each cluster of objectives", "route")
+    byKey.edgePins = MakeCheck(frame, Row(26), "Show out-of-range targets on the rim", "edgePins")
+    byKey.route = MakeCheck(frame, Row(26), "Draw a pull route through each cluster of objectives", "route")
+    byKey.pullRange = MakeSlider(frame, Row(40), "pullRange", LIMITS.pullRange[1], LIMITS.pullRange[2], 5, function(v)
+        return ("Pull range: %d yards from the outermost targets"):format(v)
+    end)
     byKey.waypoint = MakeCheck(frame, Row(30), "Show the guide's path (Factoruide)", "waypoint")
 
     byKey.terrain = MakeCheck(frame, Row(26), "Show terrain (minimap tiles)", "terrain")
@@ -2005,8 +2103,9 @@ local function PrintHelp()
         "/d2map style <color|sepia|ghost> – terrain look (now " .. db.style .. ")",
         "/d2map pins <all|objectives|off> – which quest pins (now " .. db.pins .. ")",
         "/d2map pinsize <0.5-3> – pin scale (now " .. db.pinScale .. ")",
-        "/d2map edge <on|off> – nearest off-map objective on the rim (now " .. OnOff(db.edgePins) .. ")",
-        "/d2map outlines <on|off> – a soft outline around each cluster of objectives (now " .. OnOff(db.route) .. ")",
+        "/d2map rim <on|off> – out-of-range quest targets and the guide's goal as markers on the rim (now " .. OnOff(db.edgePins) .. ")",
+        "/d2map route <on|off> – a pull route through each cluster of objectives (now " .. OnOff(db.route) .. ")",
+        "/d2map pull <0-60> – how far the route may stay from the outermost targets, in yards (now " .. db.pullRange .. ")",
         "/d2map rotate <on|off> – turn the map to the way you face (now " .. OnOff(db.rotate) .. ")",
         "/d2map waypoint <on|off> – the guide's dotted path, e.g. Factoruide's (now " .. OnOff(db.waypoint) .. ")",
         "/d2map terrain <on|off> – minimap tiles (now " .. OnOff(db.terrain) .. ")",
@@ -2037,8 +2136,8 @@ local function PrintStatus()
     Print(("pins: %s, source %s, %d known, %d drawn%s"):format(
         db.pins, activeAdapterName, recordCount, pinsShown, mask and "" or "; no mask support, using hard edges"))
     local clusters, link, pieces = LoopStatus()
-    Print(("outlines: %s, %d clusters (objectives within %d yards belong together), %d line pieces drawn; map %s"):format(
-        OnOff(db.route), clusters, link, pieces, db.rotate and "rotates with you" or "north up"))
+    Print(("pull routes: %s, %d clusters (objectives within %d yards belong together), pull range %d yards, %d line pieces drawn; map %s"):format(
+        OnOff(db.route), clusters, link, db.pullRange, pieces, db.rotate and "rotates with you" or "north up"))
     Print(("guide path: %s, source %s, %.0f yards to go, %d dots drawn"):format(OnOff(db.waypoint), PathStatus()))
     if tickFailed then Print("the update loop is stopped after an error – /d2map toggle twice to retry.") end
 end
@@ -2133,10 +2232,12 @@ commands.shape = function(rest) SetChoice("shape", rest, SHAPES, "shape") end
 commands.style = function(rest) SetChoice("style", rest, STYLES, "style") end
 commands.pins = function(rest) SetChoice("pins", rest, PIN_MODES, "pins") end
 commands.pinsize = function(rest) SetNumber("pinScale", rest, "pinsize") end
-commands.edge = function(rest) SetFlag("edgePins", rest, "edge pins") end
+commands.edge = function(rest) SetFlag("edgePins", rest, "rim markers") end
+commands.rim = commands.edge
 commands.terrain = function(rest) SetFlag("terrain", rest, "terrain") end
-commands.route = function(rest) SetFlag("route", rest, "outlines") end
+commands.route = function(rest) SetFlag("route", rest, "pull routes") end
 commands.outlines = commands.route
+commands.pull = function(rest) SetNumber("pullRange", rest, "pull") end
 commands.rotate = function(rest) SetFlag("rotate", rest, "rotate") end
 commands.waypoint = function(rest) SetFlag("waypoint", rest, "guide path") end
 commands.path = commands.waypoint

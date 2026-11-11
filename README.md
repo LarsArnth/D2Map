@@ -7,8 +7,8 @@ bevægelse og targeting går lige igennem.
 
 ```sh
 ./installer.sh        # kopierer D2Map/ ind i spillets AddOns-mappe
-lua test/koer.lua     # 155 tjek mod en attrap af WoW's API
-lua test/tegn.lua     # tegner formerne for nogle prøvesæt til docs/former.svg
+lua test/koer.lua     # 168 tjek mod en attrap af WoW's API
+lua test/tegn.lua     # tegner pull-ruterne for nogle prøvesæt til docs/former.svg
 ```
 
 Første gang skal spillet genstartes helt; derefter er `/reload` nok.
@@ -32,8 +32,9 @@ ajour:
 | `/d2map style <color\|sepia\|ghost>` | `ghost` lægger terrænet additivt ovenpå, mest som i Diablo II |
 | `/d2map pins <all\|objectives\|off>` | Alle Questies pins, kun mål og afleveringer, eller ingen |
 | `/d2map pinsize <0.5-3>` | Størrelse på pins |
-| `/d2map edge <on\|off>` | Nærmeste pin for hver quest vises på kanten, når den ligger uden for |
-| `/d2map outlines <on\|off>` | En blød form om hver klynge af quest-mål (til som standard; `route` er det gamle navn og virker også) |
+| `/d2map rim <on\|off>` | Det, der ligger uden for rammen, som mærker på kanten: nærmeste pin for hver quest og guidens mål (fra som standard) |
+| `/d2map route <on\|off>` | En pull-rute gennem hver klynge af quest-mål (til som standard) |
+| `/d2map pull <0-60>` | Pull-afstand i yards: så langt fra de yderste mål må ruten ligge (standard 40; 0 = gennem dem) |
 | `/d2map waypoint <on\|off>` | Guidens vej: Factoruides grønne prikkede streg til næste sted (til som standard) |
 | `/d2map rotate <on\|off>` | Drej kortet, så det, figuren ser mod, er opad (til som standard; fra = nord opad) |
 | `/d2map terrain <on\|off>` | Minimap-fliserne (**fra som standard**: kun pins og pilen) |
@@ -52,7 +53,8 @@ Indstillingerne gemmes pr. figur i `D2MapDB`.
 
 **Standarderne er Lars' egne** (skærmbillede 2026-11-11, version 1.5.2):
 automappet er usynligt, når man står stille, og kommer frem med 54 %, når man
-bevæger sig; 650 yards, drejer med figuren, ingen særskilt toning i combat.
+bevæger sig; 650 yards, drejer med figuren, ingen særskilt toning i combat,
+og intet på kanten for det, der ligger uden for rammen (1.6.0).
 En ny bruger ser altså ingenting, før figuren flytter sig.
 
 ## Filer
@@ -60,14 +62,14 @@ En ny bruger ser altså ingenting, før figuren flytter sig.
 | Fil | Indhold |
 |---|---|
 | `D2Map/D2Map.toc` | Metadata, `SavedVariablesPerCharacter: D2MapDB`, Questie som valgfri afhængighed |
-| `D2Map/D2Map.lua` | Hele addon'en, delt i 15 afsnit (defaults, koordinater, rammer, terræn, adaptere, pins, klyngeformer, guidens vej, fading, løkke, `Set()`, indstillingsvindue, kommandoer, events) |
+| `D2Map/D2Map.lua` | Hele addon'en, delt i 15 afsnit (defaults, koordinater, rammer, terræn, adaptere, pins, pull-ruter, guidens vej, fading, løkke, `Set()`, indstillingsvindue, kommandoer, events) |
 | `D2Map/Bindings.xml` | De tre tastaturgenveje |
 | `D2Map/Data/MinimapTiles.lua` | Fil-id'er for minimap-fliserne. **Genereret** af `scripts/byg-fliser.lua` |
 | `D2Map/Media/*.tga` | Maskerne til de bløde kanter og prikken til guidens vej. **Genereret** af `scripts/byg-masker.py` |
 | `scripts/pak.sh` | Pakker `dist/D2Map-<version>.zip` (mappen `D2Map/` med licens og noter) til CurseForge |
 | `scripts/udgiv.py` | Uploader zip-filen til CurseForge (token fra `~/.config/d2map/curseforge.env`, `--toer` = tørløb) |
 | `curseforge/` | Engelsk beskrivelse, logo og felterne til CurseForge-projektet |
-| `test/tegn.lua` | Tegner klyngeformerne for fem prøvesæt, så man kan se dem (`docs/former.png`) |
+| `test/tegn.lua` | Tegner pull-ruterne for fem prøvesæt, så man kan se dem (`docs/former.png`) |
 | `test/koer.lua` | Testen: indlæser addon'en mod en attrap, der kun kender de API-metoder, addon'en må bruge |
 
 ## Sådan virker det
@@ -105,24 +107,30 @@ En ny bruger ser altså ingenting, før figuren flytter sig.
   værdier), og et stop på under 0,4 sekund tæller stadig som bevægelse, så
   kortet ikke blinker. Pins er dobbelt så synlige som terrænet (`pinBoost`).
 
-- **Former om klynger** (afsnit 8). Først var det en streg gennem hvert mål
-  (korteste rute, version 1.2), men Lars ville ikke ramme hver mob: «tegn en
-  form som er tættest på alle pletter som muligt, gerne i clustre». Nu:
+- **Pull-ruter** (afsnit 8). Tredje udgave af «stregen»: først en korteste rute
+  gennem hver mob (1.2), så en blød form *uden om* hver klynge (1.3), og nu en
+  rute *inde i* klyngen (1.6). Lars: «jeg skal bare være i 30-50 yards afstand
+  til det yderste punkt, så kan man pulle … der er ingen grund til at løbe for
+  langt». Trinene:
   1. *Klynger*: mål inden for en lænkeafstand hører sammen. Afstanden er det
-     dobbelte af median-afstanden til nærmeste nabo (60-150 yards, hele tiere),
-     så det passer til både tætte og spredte pins. Under tre mål: ingen form.
+     dobbelte af median-afstanden til nærmeste nabo (60-150 yards, hele tiere).
+     Under tre mål: ingen rute.
   2. *Omrids*: den konvekse skal.
   3. *Indhak*: en kant længere end lænkeafstanden graves ind til det nærmeste
-     mål bag den, når kanten er over dobbelt så lang som dybden, og målet ikke
-     ligger tættere på en nabokant. Et mål må stå i omridset to gange – det gør
-     en række mål langs en vej til et bånd (ud og tilbage).
-  4. *Blødgøring*: Chaikin. Kurven ender i (A + 6V + B)/8 ved hjørnet V, så
-     hjørnet flyttes først til V + 4/3·margen·n + (2V − A − B)/6; så går
-     kurven 12 yards uden om målet.
-  Formerne ligger fast i verden og regnes kun om, når målene ændrer sig
-  (fingeraftryk af hele tal), zoomet ændres, eller spilleren har flyttet sig en
-  kvart ramme. Stykker uden for rammen tegnes ikke. Se `docs/former.png`;
-  justér konstanterne `LOOP_…` og kør `lua test/tegn.lua` for at se virkningen.
+     mål bag den, når kanten er over dobbelt så lang som dybden. Et mål må stå
+     i omridset to gange, så en række mål bliver til et bånd.
+  4. *Sammentrækning* (`PullLoop`): omridset er en elastik, hvor hvert hjørne er
+     bundet til sit mål med en snor på pull-afstanden. Hvert hjørne søger midt
+     mellem sine naboer, til snoren strammer. Et mål inde i klyngen, som ruten
+     ikke når, får sit eget hjørne og sin egen snor (højst 30 af dem).
+  5. *Blødgøring*: hver kant får et støttepunkt 30 yards fra hver ende, og så
+     Chaikin. Uden støttepunkterne skar blødgøringen så meget af et hjørne med
+     lange kanter, at hjørnets mål røg uden for pull-afstand.
+  En klynge, der kan pulles fra ét sted, trækker sig sammen til et punkt og
+  tegnes som en lille ring; en række mål bliver til en streg, der er kortere i
+  begge ender. Ruterne ligger fast i verden og regnes kun om, når målene, zoomet
+  eller pull-afstanden ændrer sig, eller spilleren har flyttet sig en kvart
+  ramme. Se `docs/former.png`; justér `LOOP_…` og kør `lua test/tegn.lua`.
 - **Guidens vej** (afsnit 9). `Factoruide.Pathing:Remaining(kontinent, nord,
   vest)` er den funktion, Factoruide selv tegner sin grønne prikkede streg ud
   fra (`Factoruide_Guide/PathLines.lua`): resten af vejen til guidens sted som
@@ -142,7 +150,7 @@ En ny bruger ser altså ingenting, før figuren flytter sig.
   (højst 60 i spillets Lua 5.1, 255 i Lua 5.5) tjekkes med `luac -l`.
 - **Rotation.** `SetViewAngle` sættes én gang pr. opdatering, og `ToScreen`
   drejer hvert punkt med uret med figurens retning, så fliser, pins og former er
-  enige (også klyngeformerne). Fliserne drejes om deres egen midte og flyttes til den drejede plads.
+  enige (også pull-ruterne). Fliserne drejes om deres egen midte og flyttes til den drejede plads.
   Mens figuren drejer, opdateres der hver frame (ellers hakker det); står den
   stille, er takten 0,1 sek. som før. Uden retning: nord opad.
 - **Én vej ind.** Vinduet, kommandoerne og genvejene sætter alle værdier gennem
@@ -179,13 +187,12 @@ skiftes ud (ingen `C_Map`), og fliserne skal hentes med sti i stedet for fil-id.
 ## Afprøvet i spillet
 
 Lars' skærmbilleder og tilbagemeldinger 2026-11-11: terræn, bløde runde kanter,
-Questies pins og spillerens pil (1.0), indstillingsvinduet (1.1) og guidens vej
-(1.4) virker. Vejen var for mørk til at se; den lyse prik (1.5.1) er ikke set i
-spillet endnu. Det er rotationen (1.2), klyngeformerne (1.3) og
-gennemsigtigheden i bevægelse (1.5) heller ikke – især klyngernes
-lænkeafstand er et gæt, indtil den er set mod Questies rigtige pins – og det er
-ikke afklaret, om `UnitPosition` er hemmelig i combat (så er automappet tomt i
-combat).
+Questies pins og spillerens pil (1.0), indstillingsvinduet (1.1), klyngeformerne
+(1.3), guidens vej (1.4) og den lyse grønne prik (1.5.1) virker. Ikke set i
+spillet endnu: pull-ruterne og det samlede flueben for kanten (1.6.0) – især
+klyngernes lænkeafstand er et gæt, indtil den er set mod flere af Questies
+rigtige pins – og det er ikke afklaret, om `UnitPosition` er hemmelig i combat
+(så er automappet tomt i combat).
 
 Lua-fejl står i `_forever_/Logs/General.log` (`[E][Lua]`), også uden fejlvisning
 slået til. Sker der en fejl i opdateringsløkken, skriver addon'en den én gang i

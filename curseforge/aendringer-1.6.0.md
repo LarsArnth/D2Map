@@ -1,0 +1,3 @@
+- **Pull routes** replace the cluster outlines: the loop now runs *inside* each group of quest objectives, as short as it can be while every target stays within pull range. A small camp becomes a single spot to stand on.
+- New setting **Pull range** (0-60 yards, default 40). At 0 the route goes through the outermost targets.
+- **Show out-of-range targets on the rim** is now one setting for both quest pins and the guide's goal, and it is off by default (also for existing characters; tick it to get the markers back).

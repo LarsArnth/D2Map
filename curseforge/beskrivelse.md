@@ -6,9 +6,10 @@ Out of the box the map is hidden while you stand still and fades in when you mov
 
 ## What it shows
 
-- **Quest pins** from Questie around your character, with Questie's own icons, colours and filters. Quests whose targets are outside the map get a small pin on the rim pointing the way.
-- **Cluster outlines**: a soft shape around each group of quest objectives, so you can see the area to work through instead of chasing single dots.
-- **The guide path** from Factoruide as a bright dotted line to the guide's next place, with a marker on the rim when it is off the map.
+- **Quest pins** from Questie around your character, with Questie's own icons, colours and filters.
+- **Pull routes**: a short loop through each group of quest objectives, placed so that every target is within pull range (40 yards by default). Run the loop and pull from it instead of walking up to every mob. A small camp becomes a single spot to stand on.
+- **The guide path** from Factoruide as a bright dotted line to the guide's next place.
+- **Out-of-range markers** (optional, off by default): quest targets and the guide's goal that are off the map shown as small markers on the rim.
 - **Terrain** (optional, off by default): the game's own minimap tiles, with soft round or square edges and three looks (colour, sepia, ghost).
 - **Your character** as an arrow in the middle. The map turns with the way you face, or stays north up.
 
