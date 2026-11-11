@@ -154,6 +154,9 @@ C_Map = {
         return ZONE.kontinent, CreateVector2D(ZONE.top - pos.y * ZONE.hoejde, ZONE.venstre - pos.x * ZONE.bredde)
     end,
 }
+-- Spillets eget waypoint (nil = intet sat). Sættes med saetWaypoint(nord, øst) i yards fra spilleren.
+local waypoint
+C_Map.GetUserWaypoint = function() return waypoint end
 -- Zone-procenter for et punkt et antal yards nord og øst for spilleren.
 local function zonePunkt(nord, oest)
     local x = (ZONE.venstre - (spiller.vest - oest)) / ZONE.bredde * 100
@@ -161,6 +164,11 @@ local function zonePunkt(nord, oest)
     return x, y
 end
 
+local function saetWaypoint(nord, oest)
+    if not nord then waypoint = nil return end
+    local x, y = zonePunkt(nord, oest)
+    waypoint = { uiMapID = ZONE.id, position = CreateVector2D(x / 100, y / 100) }
+end
 C_Timer = { After = function(_, fn) fn() end }
 local ur = 1000                                        -- spillets ur i sekunder
 function GetTime() return ur end
@@ -828,6 +836,61 @@ vej = nil
 kor(0.3)
 tjek("en anden registreret kilde bruges, når Factoruide ikke har en vej", prikVed(0, -103) ~= nil)
 D2Map.RegisterPathSource("anden", { name = "Anden guide", IsAvailable = function() return false end, GetPath = function() end })
+vej = function(n, w) return { { n, w }, { udgangsNord + 100, udgangsVest } } end
+kor(0.3)
+
+print("Shortest Path Forever og spillets waypoint")
+-- Med SPF indlæst overlader Factoruide vejen til den og giver ingen selv.
+vej = nil
+kor(0.3)
+tjek("uden nogen vej tegnes ingenting", #prikker() == 0 and maalmaerke() == nil)
+saetWaypoint(0, 100)                                   -- et mærke på kortet 100 yards mod øst
+kor(0.3)
+tjek("spillets waypoint: en lige streg derhen", prikVed(103, 0) ~= nil and maalmaerke() and taet(maalmaerke().punkter.CENTER.x, 112),
+    #prikker())
+-- En attrap af SPF: Journey() fortæller, om den guider, og hvor målet er.
+local rejse
+ShortestPathForever = { API = { Journey = function()
+    if rejse then return rejse end
+    return nil, "none"
+end } }
+local function spf(guider, maalNord, maalOest)
+    if guider == nil then
+        rejse = nil
+    else
+        local x, y = zonePunkt(maalNord, maalOest)
+        rejse = { guided = guider, goal = { map = ZONE.id, x = x / 100, y = y / 100, title = "Mål" }, legs = {}, index = 1 }
+    end
+    ur = ur + 2                                        -- D2Map spørger SPF højst én gang i sekundet
+    kor(0.3)
+end
+saetWaypoint(100, 0)                                   -- SPF har sat spillets waypoint på næste knæk: 100 yards nord
+spf(true, 400, 300)
+tjek("SPF guider: stregen går til næste knæk, ikke til det fjerne mål", prikVed(0, 103) ~= nil and prikVed(103, 0) == nil
+    and taet(maalmaerke().punkter.CENTER.y, 112))
+slash("status")
+tjek("status nævner Shortest Path Forever som kilde", chat[#chat]:find("Shortest Path Forever", 1, true) ~= nil, chat[#chat])
+saetWaypoint(nil)
+spf(true, 0, -150)                                     -- tæt på målet har SPF intet waypoint: mål 150 yards mod vest
+tjek("SPF uden waypoint, tæt på målet: stregen går lige til målet", prikVed(-159, 0) ~= nil and #prikker() > 10
+    and taet(maalmaerke().punkter.CENTER.x, -168), #prikker())
+spf(true, 0, -1000)
+tjek("SPF uden waypoint, langt fra målet: ingen streg (vejen kendes ikke)", #prikker() == 0)
+saetWaypoint(0, 100)
+spf(false, 400, 300)
+tjek("SPF på pause: spillets waypoint bruges som almindeligt mærke", prikVed(103, 0) ~= nil)
+slash("status")
+tjek("…og status siger game waypoint", chat[#chat]:find("game waypoint", 1, true) ~= nil, chat[#chat])
+vej = function(n, w) return { { n, w }, { udgangsNord - 100, udgangsVest } } end
+spf(true, 400, 300)
+tjek("har Factoruide sin egen vej, vinder den over SPF og waypointet", prikVed(0, -103) ~= nil and prikVed(103, 0) == nil)
+ShortestPathForever.API.Journey = function() error("SPF fejler") end
+vej = nil
+ur = ur + 2
+kor(0.3)
+tjek("fejler SPF, bruges spillets waypoint i stedet", prikVed(103, 0) ~= nil)
+ShortestPathForever = nil
+saetWaypoint(nil)
 vej = function(n, w) return { { n, w }, { udgangsNord + 100, udgangsVest } } end
 kor(0.3)
 

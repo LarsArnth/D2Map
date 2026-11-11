@@ -1319,7 +1319,9 @@ end -- afsnit 8
 -- En prikket grøn streg fra spilleren til det sted, en guide-addon peger på –
 -- den samme vej, guiden selv tegner på verdenskortet og minimappet. Ligger
 -- stedet uden for rammen, løber stregen ud til kanten, og et mærke på kanten
--- viser retningen.
+-- viser retningen. Kilderne spørges i rækkefølge, og den første med en vej
+-- vinder: Factoruide (hele vejen), Shortest Path Forever (til næste knæk) og
+-- til sidst spillets eget waypoint (lige derhen).
 --
 -- En kilde er en tabel med:
 --     name                              navnet, der vises i /d2map status
@@ -1376,6 +1378,96 @@ RegisterPathSource("factoruide", {
         -- Er guiden skjult, viser den heller ikke sin egen streg.
         if type(guide.Get) == "function" and guide:Get("uiShown") == false then return nil end
         return guide.Pathing:Remaining(continent, north, west)
+    end,
+})
+
+---- Spillets eget waypoint -----------------------------------------------------
+-- Det mærke, spillet selv peger på (C_Map.GetUserWaypoint): et sted man har sat
+-- på kortet, eller et, en anden addon har sat. Giver kontinent, nord, vest.
+
+local function UserWaypoint()
+    if not (C_Map and C_Map.GetUserWaypoint) then return end
+    local ok, point = pcall(C_Map.GetUserWaypoint)
+    if not ok or type(point) ~= "table" or IsSecret(point) then return end
+    local position = point.position
+    if not IsNumber(point.uiMapID) or type(position) ~= "table"
+        or not IsNumber(position.x) or not IsNumber(position.y) then
+        return
+    end
+    return ZoneToWorld(point.uiMapID, position.x, position.y)
+end
+
+-- En lige vej fra spilleren til ét punkt. Tabellerne genbruges, så der ikke
+-- laves affald ti gange i sekundet.
+local straight = { { 0, 0 }, { 0, 0 } }
+
+local function StraightTo(north, west, toNorth, toWest)
+    straight[1][1], straight[1][2] = north, west
+    straight[2][1], straight[2][2] = toNorth, toWest
+    return straight
+end
+
+---- Shortest Path Forever -----------------------------------------------------
+-- SPF finder vejen (gang, flyvepunkter, både …) og tegner den selv på kortet og
+-- minimappet. Dens offentlige API (ShortestPathForever.API.Journey) fortæller,
+-- om den guider, og hvor målet er – men ikke selve vejens punkter; dem holder
+-- den for sig selv. Til gengæld sætter den spillets waypoint på det næste KNÆK
+-- på vejen, og det kan læses. Stregen går derfor fra spilleren til næste knæk:
+-- det stykke, man skal gå nu. Tæt på målet har SPF intet waypoint; så går
+-- stregen lige til målet.
+--
+-- Vigtigt for Factoruide: når SPF er indlæst, overlader Factoruide vejen til
+-- den («Link Shortest Path Forever», til som standard) og giver ikke længere
+-- sin egen. Uden denne kilde ville stregen forsvinde, når SPF installeres.
+
+local SPF_STRAIGHT_YARDS = 300     -- uden waypoint: kun lige til målet, når det er så tæt på
+local spfChecked, spfGuided, spfContinent, spfNorth, spfWest = nil, false, nil, nil, nil
+
+RegisterPathSource("spf", {
+    name = "Shortest Path Forever",
+    IsAvailable = function()
+        local spf = ShortestPathForever
+        return type(spf) == "table" and type(spf.API) == "table" and type(spf.API.Journey) == "function"
+    end,
+    GetPath = function(continent, north, west)
+        -- Journey() bygger nye tabeller ved hvert kald, så den spørges højst én gang i sekundet.
+        local now = GetTime and GetTime() or 0
+        if not spfChecked or now - spfChecked >= 1 or now < spfChecked then
+            spfChecked, spfGuided, spfContinent = now, false, nil
+            local journey = ShortestPathForever.API.Journey()
+            if type(journey) == "table" and journey.guided then
+                spfGuided = true
+                local goal = journey.goal
+                if type(goal) == "table" and IsNumber(goal.map) and IsNumber(goal.x) and IsNumber(goal.y) then
+                    spfContinent, spfNorth, spfWest = ZoneToWorld(goal.map, goal.x, goal.y)
+                end
+            end
+        end
+        if not spfGuided then return nil end
+        local bendContinent, bendNorth, bendWest = UserWaypoint()
+        if bendContinent == continent then
+            return StraightTo(north, west, bendNorth, bendWest)
+        end
+        if spfContinent == continent then
+            local dn, dw = spfNorth - north, spfWest - west
+            if dn * dn + dw * dw <= SPF_STRAIGHT_YARDS * SPF_STRAIGHT_YARDS then
+                return StraightTo(north, west, spfNorth, spfWest)
+            end
+        end
+    end,
+})
+
+-- Sidst: et waypoint, der ikke er en guides – fx et sted, man selv har sat på kortet.
+RegisterPathSource("waypoint", {
+    name = "game waypoint",
+    IsAvailable = function()
+        return C_Map ~= nil and C_Map.GetUserWaypoint ~= nil
+    end,
+    GetPath = function(continent, north, west)
+        local toContinent, toNorth, toWest = UserWaypoint()
+        if toContinent == continent then
+            return StraightTo(north, west, toNorth, toWest)
+        end
     end,
 })
 
@@ -1954,7 +2046,7 @@ local function CreateOptions()
     byKey.pullRange = MakeSlider(frame, Row(40), "pullRange", LIMITS.pullRange[1], LIMITS.pullRange[2], 5, function(v)
         return ("Pull range: %d yards from the outermost targets"):format(v)
     end)
-    byKey.waypoint = MakeCheck(frame, Row(30), "Show the guide's path (Factoruide)", "waypoint")
+    byKey.waypoint = MakeCheck(frame, Row(30), "Show the path to the guide's next place or waypoint", "waypoint")
 
     byKey.terrain = MakeCheck(frame, Row(26), "Show terrain (minimap tiles)", "terrain")
     byKey.style = MakeChoice(frame, Row(26), "Look", "style", {
@@ -2107,7 +2199,7 @@ local function PrintHelp()
         "/d2map route <on|off> – a pull route through each cluster of objectives (now " .. OnOff(db.route) .. ")",
         "/d2map pull <0-60> – how far the route may stay from the outermost targets, in yards (now " .. db.pullRange .. ")",
         "/d2map rotate <on|off> – turn the map to the way you face (now " .. OnOff(db.rotate) .. ")",
-        "/d2map waypoint <on|off> – the guide's dotted path, e.g. Factoruide's (now " .. OnOff(db.waypoint) .. ")",
+        "/d2map waypoint <on|off> – dotted path from Factoruide, Shortest Path Forever or the game's waypoint (now " .. OnOff(db.waypoint) .. ")",
         "/d2map terrain <on|off> – minimap tiles (now " .. OnOff(db.terrain) .. ")",
         "/d2map source <auto|questie|blizzard> – where pins come from (now " .. db.source .. ")",
         "/d2map bind [key] – put a key on toggle (Alt+M if none given)",

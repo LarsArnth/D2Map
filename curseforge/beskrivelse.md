@@ -8,7 +8,7 @@ Out of the box the map is hidden while you stand still and fades in when you mov
 
 - **Quest pins** from Questie around your character, with Questie's own icons, colours and filters.
 - **Pull routes**: a short loop through each group of quest objectives, placed so that every target is within pull range (40 yards by default). Run the loop and pull from it instead of walking up to every mob. A small camp becomes a single spot to stand on.
-- **The guide path** from Factoruide as a bright dotted line to the guide's next place.
+- **The guide path** as a bright dotted line: Factoruide's planned walk to its next place, the next turn of a Shortest Path Forever journey, or simply the game's own waypoint.
 - **Out-of-range markers** (optional, off by default): quest targets and the guide's goal that are off the map shown as small markers on the rim.
 - **Terrain** (optional, off by default): the game's own minimap tiles, with soft round or square edges and three looks (colour, sepia, ghost).
 - **Your character** as an arrow in the middle. The map turns with the way you face, or stays north up.
@@ -29,6 +29,7 @@ Settings are saved per character.
 
 - **Questie** (optional): quest pins. Without Questie, D2Map falls back to the game's own quest markers, one per quest.
 - **Factoruide Guide** (optional): the guide path.
+- **Shortest Path Forever** (optional): the line to the next turn of its journey.
 
 Other addons can add their own pins and paths through `D2Map.RegisterAdapter` and `D2Map.RegisterPathSource`.
 

@@ -7,7 +7,7 @@ bevægelse og targeting går lige igennem.
 
 ```sh
 ./installer.sh        # kopierer D2Map/ ind i spillets AddOns-mappe
-lua test/koer.lua     # 168 tjek mod en attrap af WoW's API
+lua test/koer.lua     # 178 tjek mod en attrap af WoW's API
 lua test/tegn.lua     # tegner pull-ruterne for nogle prøvesæt til docs/former.svg
 ```
 
@@ -35,7 +35,7 @@ ajour:
 | `/d2map rim <on\|off>` | Det, der ligger uden for rammen, som mærker på kanten: nærmeste pin for hver quest og guidens mål (fra som standard) |
 | `/d2map route <on\|off>` | En pull-rute gennem hver klynge af quest-mål (til som standard) |
 | `/d2map pull <0-60>` | Pull-afstand i yards: så langt fra de yderste mål må ruten ligge (standard 40; 0 = gennem dem) |
-| `/d2map waypoint <on\|off>` | Guidens vej: Factoruides grønne prikkede streg til næste sted (til som standard) |
+| `/d2map waypoint <on\|off>` | Grøn prikket streg til guidens næste sted: fra Factoruide, Shortest Path Forever eller spillets eget waypoint (til som standard) |
 | `/d2map rotate <on\|off>` | Drej kortet, så det, figuren ser mod, er opad (til som standard; fra = nord opad) |
 | `/d2map terrain <on\|off>` | Minimap-fliserne (**fra som standard**: kun pins og pilen) |
 | `/d2map source <auto\|questie\|blizzard>` | Hvor pins kommer fra |
@@ -144,6 +144,18 @@ En ny bruger ser altså ingenting, før figuren flytter sig.
   (`uiShown`), eller har Factoruide slået sin vej fra (`pathMode`), er der
   ingen streg. Andre guider: `D2Map.RegisterPathSource("navn", { name,
   IsAvailable(), GetPath(kontinent, nord, vest) })`.
+- **Shortest Path Forever** (SPF, 2026-11-11). Når SPF er indlæst, overlader
+  Factoruide vejen til den («Link Shortest Path Forever», til som standard), og
+  `Pathing:Remaining` giver nil – stregen ville forsvinde. SPF's offentlige API
+  (`ShortestPathForever.API.Journey()`) fortæller, om den guider, og hvor målet
+  er, men udleverer med vilje ikke vejens punkter. Den sætter til gengæld
+  spillets waypoint på det næste *knæk* på vejen (`guide.bend` i
+  `Journey/JourneyGuide.lua`), og det læses med `C_Map.GetUserWaypoint`. Kilden
+  `spf` tegner derfor stregen fra spilleren til næste knæk; uden waypoint (tæt
+  på målet) lige til målet, hvis det er under 300 yards væk. `Journey()` bygger
+  nye tabeller ved hvert kald og spørges højst én gang i sekundet. Sidste kilde,
+  `waypoint`, er spillets waypoint uden nogen guide (et mærke sat på kortet).
+  SPF er GPL-3.0; D2Map kalder kun dens API og kopierer ingen kode.
 - **200 lokale.** Lua tillader højst 200 lokale variabler i én funktion, og
   hele filen er én. Afsnit 8 og 9 ligger derfor i `do … end`-blokke og viser
   kun deres funktioner udad. `luac -p` fanger grænsen; upvalues pr. funktion
@@ -189,7 +201,8 @@ skiftes ud (ingen `C_Map`), og fliserne skal hentes med sti i stedet for fil-id.
 Lars' skærmbilleder og tilbagemeldinger 2026-11-11: terræn, bløde runde kanter,
 Questies pins og spillerens pil (1.0), indstillingsvinduet (1.1), klyngeformerne
 (1.3), guidens vej (1.4) og den lyse grønne prik (1.5.1) virker. Ikke set i
-spillet endnu: pull-ruterne og det samlede flueben for kanten (1.6.0) – især
+spillet endnu: pull-ruterne og det samlede flueben for kanten (1.6.0), og
+stregen til Shortest Path Forevers næste knæk (1.6.1) – især
 klyngernes lænkeafstand er et gæt, indtil den er set mod flere af Questies
 rigtige pins – og det er ikke afklaret, om `UnitPosition` er hemmelig i combat
 (så er automappet tomt i combat).

@@ -1,0 +1,2 @@
+- The dotted path now also works with **Shortest Path Forever**: it leads to the next turn of the journey. Without this, Factoruide's path disappeared as soon as Shortest Path Forever was installed, because Factoruide hands the route over to it.
+- The dotted path also follows the game's own waypoint (a pin you set on the map) when no guide is leading you.
