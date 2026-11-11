@@ -7,7 +7,7 @@ bevægelse og targeting går lige igennem.
 
 ```sh
 ./installer.sh        # kopierer D2Map/ ind i spillets AddOns-mappe
-lua test/koer.lua     # 89 tjek mod en attrap af WoW's API
+lua test/koer.lua     # 113 tjek mod en attrap af WoW's API
 ```
 
 Første gang skal spillet genstartes helt; derefter er `/reload` nok.
@@ -31,6 +31,8 @@ ajour:
 | `/d2map pins <all\|objectives\|off>` | Alle Questies pins, kun mål og afleveringer, eller ingen |
 | `/d2map pinsize <0.5-3>` | Størrelse på pins |
 | `/d2map edge <on\|off>` | Nærmeste pin for hver quest vises på kanten, når den ligger uden for |
+| `/d2map route <on\|off>` | Streg fra dig gennem alle mål i rammen, i den korteste rækkefølge (til som standard) |
+| `/d2map rotate <on\|off>` | Drej kortet, så det, figuren ser mod, er opad (fra som standard: nord opad) |
 | `/d2map terrain <on\|off>` | Minimap-fliserne (**fra som standard**: kun pins og pilen) |
 | `/d2map source <auto\|questie\|blizzard>` | Hvor pins kommer fra |
 | `/d2map bind [tast]` | Læg en tast på toggle (Alt+M, hvis ingen nævnes) |
@@ -50,7 +52,7 @@ Indstillingerne gemmes pr. figur i `D2MapDB`.
 | Fil | Indhold |
 |---|---|
 | `D2Map/D2Map.toc` | Metadata, `SavedVariablesPerCharacter: D2MapDB`, Questie som valgfri afhængighed |
-| `D2Map/D2Map.lua` | Hele addon'en, delt i 13 afsnit (defaults, koordinater, rammer, terræn, adaptere, pins, fading, løkke, `Set()`, indstillingsvindue, kommandoer, events) |
+| `D2Map/D2Map.lua` | Hele addon'en, delt i 14 afsnit (defaults, koordinater, rammer, terræn, adaptere, pins, rute, fading, løkke, `Set()`, indstillingsvindue, kommandoer, events) |
 | `D2Map/Bindings.xml` | De tre tastaturgenveje |
 | `D2Map/Data/MinimapTiles.lua` | Fil-id'er for minimap-fliserne. **Genereret** af `scripts/byg-fliser.lua` |
 | `D2Map/Media/mask-*.tga` | Maskerne til de bløde kanter. **Genereret** af `scripts/byg-masker.py` |
@@ -86,6 +88,22 @@ Indstillingerne gemmes pr. figur i `D2MapDB`.
   gennemsigtigheden glider derhen på 0,35 sekund. Pins er dobbelt så synlige som
   terrænet (`pinBoost`).
 
+- **Ruten** (afsnit 8) er en streg fra spilleren gennem alle `objective`-pins i
+  rammen. Lars bad om lineær regression, men den giver én ret linje gennem
+  punktsværmen, ikke en vej forbi hvert mål; det her er den handelsrejsendes
+  problem. Nærmeste nabo → 2-opt → or-opt, og med højst 8 mål prøves alle
+  rækkefølger med afskæring (nedre grænse: hvert manglende mål koster mindst
+  afstanden til sin nærmeste nabo). Målt i testen mod den korteste af alle
+  rækkefølger: 7-8 mål altid den korteste, 10 mål den korteste i 8 af 12 sæt og
+  højst 10 % længere. Højst 40 stop, mål under 8 yards fra hinanden er ét stop,
+  og et mål, man har stået ved (15 yards), holdes ude i 3 minutter – ellers
+  peger stregen tilbage på det, så snart man går videre. Regnes om, når pins
+  hentes (1/sek.); linjerne flyttes hver opdatering.
+- **Rotation.** `SetViewAngle` sættes én gang pr. opdatering, og `ToScreen`
+  drejer hvert punkt med uret med figurens retning, så fliser, pins og rute er
+  enige. Fliserne drejes om deres egen midte og flyttes til den drejede plads.
+  Mens figuren drejer, opdateres der hver frame (ellers hakker det); står den
+  stille, er takten 0,1 sek. som før. Uden retning: nord opad.
 - **Én vej ind.** Vinduet, kommandoerne og genvejene sætter alle værdier gennem
   `Set(key, value)` (afsnit 10), som klipper til intervallet, gør det, ændringen
   kræver (`AFTER`), og opdaterer vinduet. Ny indstilling = en linje i
@@ -119,10 +137,10 @@ skiftes ud (ingen `C_Map`), og fliserne skal hentes med sti i stedet for fil-id.
 
 ## Afprøvet i spillet
 
-Lars' skærmbillede 2026-11-11 (version 1.0): terræn, bløde runde kanter,
-Questies pins og spillerens pil virker. Indstillingsvinduet (1.1) er ikke set i
-spillet endnu, og det er heller ikke afklaret, om `UnitPosition` er hemmelig i
-combat (så er automappet tomt i combat).
+Lars' skærmbilleder 2026-11-11: terræn, bløde runde kanter, Questies pins og
+spillerens pil (1.0) og indstillingsvinduet (1.1) virker. Ruten og rotationen
+(1.2) er ikke set i spillet endnu, og det er heller ikke afklaret, om
+`UnitPosition` er hemmelig i combat (så er automappet tomt i combat).
 
 Lua-fejl står i `_forever_/Logs/General.log` (`[E][Lua]`), også uden fejlvisning
 slået til. Sker der en fejl i opdateringsløkken, skriver addon'en den én gang i

@@ -39,7 +39,7 @@ for _, navn in ipairs({
     "ClearAllPoints", "StartMoving", "StopMovingOrSizing", "RegisterEvent", "UnregisterEvent",
     "SetAtlas", "SetColorTexture", "SetWidth", "SetHeight", "SetDesaturated", "SetBlendMode",
     "SetSnapToPixelGrid", "SetTexelSnappingBias", "SetDrawLayer",
-    "SetToplevel", "SetMinMaxValues", "SetValueStep", "SetObeyStepOnDrag",
+    "SetToplevel", "SetMinMaxValues", "SetValueStep", "SetObeyStepOnDrag", "SetThickness",
 }) do
     Widget[navn] = tom
 end
@@ -91,6 +91,9 @@ end
 Widget.CreateTexture = barn("Texture")
 Widget.CreateMaskTexture = barn("MaskTexture")
 Widget.CreateFontString = barn("FontString")
+Widget.CreateLine = barn("Line")
+function Widget:SetStartPoint(punkt, rel, x, y) self.fra = { x = x, y = y } end
+function Widget:SetEndPoint(punkt, rel, x, y) self.til = { x = x, y = y } end
 
 local rammer = {}
 UIParent = NyWidget("Frame")
@@ -159,6 +162,8 @@ local function zonePunkt(nord, oest)
 end
 
 C_Timer = { After = function(_, fn) fn() end }
+local ur = 1000                                        -- spillets ur i sekunder
+function GetTime() return ur end
 C_Texture = { GetAtlasInfo = function() return nil end }
 
 local bindinger = {}
@@ -242,6 +247,17 @@ local function pins()
     for _, b in ipairs(pinLayer.born) do if b.slags == "Texture" and b.shown then t[#t + 1] = b end end
     return t
 end
+local function linjer()
+    local t = {}
+    for _, b in ipairs(pinLayer.born) do if b.slags == "Line" and b.shown then t[#t + 1] = b end end
+    return t
+end
+-- Rutens stop som tekst, fx "-67,-45 56,112" (skærmkoordinater, afrundet).
+local function rute()
+    local dele = {}
+    for _, l in ipairs(linjer()) do dele[#dele + 1] = ("%d,%d"):format(math.floor(l.til.x + 0.5), math.floor(l.til.y + 0.5)) end
+    return table.concat(dele, " ")
+end
 local function pinVed(x, y)
     for _, p in ipairs(pins()) do
         if taet(p.punkter.CENTER.x, x, 0.05) and taet(p.punkter.CENTER.y, y, 0.05) then return p end
@@ -261,8 +277,9 @@ local cx, cy = 32 + 100 / (1600 / 3), 32 + 9000 / (1600 / 3)
 local egen
 for _, t in ipairs(f) do if t.tekstur == ns.Tiles[0][32 * 64 + 48] then egen = t end end
 tjek("spillerens egen flise har det rigtige fil-id", egen ~= nil)
-tjek("flisen ligger rigtigt i forhold til spilleren", egen and taet(egen.punkter.TOPLEFT.x, (32 - cx) * tilePx)
-    and taet(egen.punkter.TOPLEFT.y, -(48 - cy) * tilePx), egen and (egen.punkter.TOPLEFT.x .. ", " .. egen.punkter.TOPLEFT.y))
+tjek("flisen ligger rigtigt i forhold til spilleren", egen and taet(egen.punkter.CENTER.x, (32.5 - cx) * tilePx)
+    and taet(egen.punkter.CENTER.y, -(48.5 - cy) * tilePx), egen and (egen.punkter.CENTER.x .. ", " .. egen.punkter.CENTER.y))
+tjek("uden rotation er flisen ikke drejet", egen and egen.rotation == 0)
 tjek("flisen har den rigtige størrelse", egen and taet(egen.bredde, tilePx))
 tjek("fliserne er maskeret (bløde kanter)", egen and egen.maske ~= nil and egen.maske.tekstur:find("mask%-round"))
 tjek("spillerens pil drejer med figuren", pinLayer.born[1].rotation == 1.25)
@@ -292,10 +309,18 @@ tjek("kant-pinnen er mindre og svagere", kant and taet(kant.bredde, 16 * 0.75) a
 -- 4 inden for rammen (to mobs, aflevering, ny quest) + 1 på kanten for quest 2
 tjek("kun den nærmeste pin pr. quest på kanten (5 pins i alt)", #pins() == 5, #pins())
 
+print("Rute gennem målene")
+-- To mål i rammen (quest 1): det nærmeste først. Aflevering, ny quest, skjulte og fjerne er ikke med.
+tjek("ruten går til det nærmeste mål først og så videre", rute() == "-67,-45 56,112", rute())
+local l = linjer()
+tjek("første stykke begynder ved spilleren", l[1].fra.x == 0 and l[1].fra.y == 0)
+tjek("næste stykke begynder, hvor det forrige slutter", l[2].fra.x == l[1].til.x and l[2].fra.y == l[1].til.y)
+
 print("Flydende opdatering")
 spiller.nord = spiller.nord + 10                      -- gå 10 yards mod nord
 kor(0.12)
 tjek("pins flytter sig med spilleren inden for 0,1 sek.", pinVed(50 * px, 90 * px) ~= nil)
+tjek("ruten flytter sig med", linjer()[2].til.y == 90 * px)
 spiller.nord = spiller.nord - 10
 kor(0.12)
 
@@ -403,6 +428,13 @@ tjek("klik på det valgte igen ændrer ingenting", D2MapDB.pins == "objectives" 
 felt.shape.buttons[2]:Klik()
 kor(0.2)
 tjek("valg af Square skifter maske", D2MapDB.shape == "square" and fliser()[1].maske.tekstur:find("mask%-square") ~= nil)
+felt.route:Klik()
+kor(0.2)
+tjek("afkrydsning slår ruten fra", D2MapDB.route == false and #linjer() == 0)
+felt.route:Klik()
+felt.rotate:Klik()
+tjek("afkrydsning slår rotation til", D2MapDB.rotate == true)
+felt.rotate:Klik()
 felt.locked:Klik()
 tjek("Unlock to move slår mus til", D2MapDB.locked == false and root.mus == true and felt.locked.afkrydset == true)
 felt.locked:Klik()
@@ -458,6 +490,138 @@ D2Map.RegisterAdapter("Proeve", {
 slash("source proeve")
 kor(1.2)
 tjek("en registreret adapter kan vælges og tegner", pinVed(0, 20 * px) ~= nil)
+
+print("Ruten forbedres, og besøgte mål tages ud")
+-- Tre mål på en øst-vest-linje: 50 øst, 150 øst og 55 vest. Nærmeste nabo giver
+-- 50 → 150 → -55 (355 yards); den korteste er -55 → 50 → 150 (260 yards).
+local maal = { { 0, 50 }, { 0, 150 }, { 0, -55 } }
+D2Map.RegisterAdapter("Proeve", {
+    name = "Prøve",
+    IsAvailable = function() return true end,
+    Collect = function(out)
+        for i, m in ipairs(maal) do
+            D2Map.EmitPin(out, i, 0, -9000 + m[1], -100 - m[2], "proeve.blp", 1, 1, 1, "objective", 600 + i)
+        end
+        return #maal
+    end,
+})
+kor(1.2)
+tjek("or-opt finder den korte rækkefølge (vest først)", rute() == "-62,0 56,0 168,0", rute())
+spiller.vest = -100 + 50                                -- gå hen til målet 55 yards mod vest (5 fra)
+kor(1.2)
+tjek("et besøgt mål tages ud af ruten", #linjer() == 2 and rute() == "112,0 224,0", rute())
+spiller.vest = -100                                    -- tilbage: det besøgte mål er stadig ude
+kor(1.2)
+tjek("…så stregen ikke peger tilbage på det", rute() == "56,0 168,0", rute())
+ur = ur + 200                                          -- tre minutter efter er det med igen (respawn)
+kor(1.2)
+tjek("…og er med igen efter tre minutter", #linjer() == 3, rute())
+-- Hvor god er ruten? Tilfældige sæt af mål sammenlignes med den korteste af alle
+-- rækkefølger: 40 sæt med 7 mål (her skal ruten være den korteste) og 12 sæt med
+-- 10 mål (her er den et bud).
+local froe = 12345
+local function tilfaeldig()                            -- fast talrække, så testen er ens hver gang
+    froe = (froe * 1103515245 + 12345) % 2147483648
+    return froe / 2147483648
+end
+local function laengde(punkter, raekke)
+    local sum, x, y = 0, 0, 0
+    for _, i in ipairs(raekke) do
+        sum = sum + math.sqrt((punkter[i].x - x) ^ 2 + (punkter[i].y - y) ^ 2)
+        x, y = punkter[i].x, punkter[i].y
+    end
+    return sum
+end
+local function korteste(punkter)
+    local bedst, brugt = math.huge, {}
+    local function soeg(dybde, x, y, sum)
+        if sum >= bedst then return end
+        if dybde > #punkter then bedst = sum return end
+        for i = 1, #punkter do
+            if not brugt[i] then
+                brugt[i] = true
+                soeg(dybde + 1, punkter[i].x, punkter[i].y, sum + math.sqrt((punkter[i].x - x) ^ 2 + (punkter[i].y - y) ^ 2))
+                brugt[i] = false
+            end
+        end
+    end
+    soeg(1, 0, 0, 0)
+    return bedst
+end
+local function maalRuter(saet, antalMaal)
+  local optimale, vaerste = 0, 1
+  for _ = 1, saet do
+    maal = {}
+    while #maal < antalMaal do
+        local vinkel, afstand = tilfaeldig() * 2 * math.pi, 30 + tilfaeldig() * 180
+        local n, o = math.sin(vinkel) * afstand, math.cos(vinkel) * afstand
+        local fri = true
+        for _, m in ipairs(maal) do if (m[1] - n) ^ 2 + (m[2] - o) ^ 2 < 20 ^ 2 then fri = false end end
+        if fri then maal[#maal + 1] = { n, o } end
+    end
+    ur = ur + 200                                      -- glem besøgte mål fra forrige sæt
+    kor(1.2)
+    local punkter, raekke = {}, {}
+    for i, li in ipairs(linjer()) do punkter[i], raekke[i] = { x = li.til.x, y = li.til.y }, i end
+    local forhold = #punkter == antalMaal and laengde(punkter, raekke) / korteste(punkter) or 99
+    if forhold < 1.0001 then optimale = optimale + 1 end
+    vaerste = math.max(vaerste, forhold)
+  end
+  print(("       %d mål: den korteste mulige i %d af %d sæt; værste var %.1f %% længere"):format(
+      antalMaal, optimale, saet, (vaerste - 1) * 100))
+  return optimale, vaerste
+end
+local optimale, vaerste = maalRuter(40, 7)
+tjek("op til 8 mål: ruten er altid den korteste, der findes", optimale == 40 and vaerste < 1.0001, vaerste)
+optimale, vaerste = maalRuter(12, 10)
+tjek("10 mål: aldrig mere end 15 % længere end den korteste", vaerste <= 1.15, vaerste)
+
+maal = {}
+for i = 1, 60 do maal[i] = { math.sin(i * 1.7) * 200, math.cos(i * 2.3) * 200 } end
+kor(1.2)
+tjek("mange mål: højst 40 stop, og ruten besøger hvert kun én gang", (function()
+    local set, n = {}, 0
+    for _, li in ipairs(linjer()) do
+        local k = li.til.x .. ":" .. li.til.y
+        if set[k] then return false end
+        set[k], n = true, n + 1
+    end
+    return n > 20 and n <= 40
+end)(), #linjer())
+slash("route off")
+kor(0.2)
+tjek("/d2map route off", #linjer() == 0)
+slash("route on")
+
+print("Rotation efter figurens retning")
+maal = { { 0, -50 }, { 80, 0 } }                       -- ét mål 50 yards mod vest, ét 80 mod nord
+spiller.retning = math.pi / 2                          -- figuren ser mod vest
+kor(1.2)
+tjek("nord opad: målet mod vest står til venstre", pinVed(-50 * px, 0) ~= nil)
+tjek("nord opad: pilen peger mod vest", taet(pinLayer.born[1].rotation, math.pi / 2))
+slash("rotate on")
+kor(0.2)
+tjek("rotate: det, figuren ser mod (vest), står lige op", pinVed(0, 50 * px) ~= nil)
+tjek("rotate: nord ligger til højre", pinVed(80 * px, 0) ~= nil)
+tjek("rotate: pilen peger lige op", taet(pinLayer.born[1].rotation, 0))
+tjek("rotate: ruten drejer med", rute() == "0,56 90,0", rute())
+slash("terrain on")
+kor(0.2)
+local drejet
+for _, fl in ipairs(fliser()) do if fl.tekstur == ns.Tiles[0][32 * 64 + 48] then drejet = fl end end
+local ex, ey = (32.5 - cx) * tilePx, -(48.5 - cy) * tilePx   -- flisens midte med nord opad
+tjek("rotate: fliserne drejes og flyttes med", drejet and taet(drejet.rotation, -math.pi / 2)
+    and taet(drejet.punkter.CENTER.x, ey) and taet(drejet.punkter.CENTER.y, -ex),
+    drejet and (drejet.punkter.CENTER.x .. ", " .. drejet.punkter.CENTER.y))
+slash("terrain off")
+spiller.retning = math.pi                              -- vend mod syd
+root.scripts.OnUpdate(root, 0.001)                     -- én frame, langt under 0,1 sek.
+tjek("rotate: kortet følger med i samme frame, mens figuren drejer", pinVed(50 * px, 0) ~= nil)
+spiller.retning = nil                                  -- retning ukendt (fx hemmelig)
+kor(0.2)
+tjek("uden retning falder kortet tilbage til nord opad", pinVed(-50 * px, 0) ~= nil)
+spiller.retning = 1.25
+slash("rotate off")
 slash("source auto")
 
 print("Tastaturgenvej, når Alt+M peger på en addon, der er slået fra")
@@ -489,7 +653,7 @@ tjek("/d2map bind ctrl-n", bindinger["CTRL-N"] == "D2MAP_TOGGLE")
 print("Nulstilling og gemte indstillinger")
 slash("reset")
 tjek("/d2map reset", D2MapDB.opacity == 40 and D2MapDB.span == 500 and D2MapDB.bindingOffered == true
-    and D2MapDB.terrain == false)
+    and D2MapDB.terrain == false and D2MapDB.route == true and D2MapDB.rotate == false)
 -- En ødelagt SavedVariables-fil: indlæs addon'en forfra og se, at den retter op.
 D2MapDB.opacity = "vrøvl"
 D2MapDB.size = 99999

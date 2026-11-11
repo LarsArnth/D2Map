@@ -13,12 +13,13 @@
 --   5. Terræn (minimap-fliser)
 --   6. Adaptere til quest-pins (Questie, Blizzards egne quest-punkter)
 --   7. Pins på automappet
---   8. Gennemsigtighed og fading i combat
---   9. Opdateringsløkken (droslet OnUpdate)
---  10. Indstillinger: ét sted, hvor en værdi sættes
---  11. Indstillingsvinduet (/d2map)
---  12. Offentlig API, tastaturgenveje og slash-kommandoer
---  13. Events
+--   8. Korteste rute gennem quest-målene
+--   9. Gennemsigtighed og fading i combat
+--  10. Opdateringsløkken (droslet OnUpdate)
+--  11. Indstillinger: ét sted, hvor en værdi sættes
+--  12. Indstillingsvinduet (/d2map)
+--  13. Offentlig API, tastaturgenveje og slash-kommandoer
+--  14. Events
 --
 -- Skrevet til WoW: Forever (interface 16001), men bruger kun API'er, der også
 -- findes i Classic Era, og tjekker for hver af dem, om den findes.
@@ -46,6 +47,8 @@ local DEFAULTS = {
     pinScale       = 1.0,      -- størrelsesfaktor for pins
     pinBoost       = 2.0,      -- pins er så mange gange mere synlige end terrænet
     edgePins       = true,     -- vis nærmeste pin for hver quest på kanten, når den er uden for
+    route          = true,     -- tegn den korteste rute gennem quest-målene i rammen
+    rotate         = false,    -- drej kortet, så det, figuren ser mod, er opad (ellers nord opad)
     source         = "auto",   -- auto | questie | blizzard (hvilken adapter)
     strata         = "LOW",    -- frame strata: under de fleste UI-elementer
     x              = 0,        -- forskydning fra skærmens midte
@@ -107,6 +110,7 @@ local PIN_KINDS = {
 --------------------------------------------------------------------------------
 
 local floor, abs, sqrt, min, max = math.floor, math.abs, math.sqrt, math.min, math.max
+local sin, cos = math.sin, math.cos
 local pairs, ipairs, type, tonumber, tostring, pcall = pairs, ipairs, type, tonumber, tostring, pcall
 local wipe = wipe or function(t) for k in pairs(t) do t[k] = nil end return t end
 
@@ -226,6 +230,21 @@ local function PlayerFacing()
     if ok and IsNumber(facing) then return facing end
 end
 
+-- Kortets drejning i den igangværende opdatering. 0 = nord opad. Med «rotate»
+-- slået til er det spillerens retning, så det, figuren ser mod, peger opad.
+-- Sættes én gang pr. opdatering (Tick), så fliser, pins og rute er enige.
+local viewAngle, viewSin, viewCos = 0, 0, 1
+
+local function SetViewAngle(angle)
+    viewAngle, viewSin, viewCos = angle, sin(angle), cos(angle)
+end
+
+-- Drejer et punkt (øst, nord) i pixels fra rammens midte med uret med viewAngle.
+-- Retningen figuren ser i, (-sin f, cos f), ender dermed på (0, 1): lige op.
+local function ToScreen(east, north)
+    return east * viewCos + north * viewSin, north * viewCos - east * viewSin
+end
+
 --------------------------------------------------------------------------------
 -- 4. Rammer, styling og click-through
 --
@@ -311,7 +330,7 @@ local function SavePosition()
     ApplyLayout()
 end
 
-local SetSpan                  -- defineres i afsnit 10; bruges af musehjulet
+local SetSpan                  -- defineres i afsnit 11; bruges af musehjulet
 
 local function CreateFrames()
     root = CreateFrame("Frame", "D2MapFrame", UIParent)
@@ -388,11 +407,12 @@ end
 --------------------------------------------------------------------------------
 -- 5. Terræn
 --
--- Fliserne lægges i et gitter omkring spilleren. Flise (kolonne, række) har sit
--- øverste venstre hjørne (kolonne - cx) fliser øst og (række - cy) fliser syd
--- for spilleren, hvor cx, cy er spillerens egen position målt i fliser.
+-- Fliserne lægges i et gitter omkring spilleren. Flise (kolonne, række) har sin
+-- midte (kolonne + ½ - cx) fliser øst og (række + ½ - cy) fliser syd for
+-- spilleren, hvor cx, cy er spillerens egen position målt i fliser.
 -- Hver opdatering flytter kun fliserne; teksturen skiftes først, når spilleren
--- går ind på en ny flise.
+-- går ind på en ny flise. Drejes kortet, drejes hver flise om sin egen midte og
+-- flyttes til den drejede plads – det er det samme som at dreje hele kortet.
 --------------------------------------------------------------------------------
 
 local tilesShown = 0
@@ -430,6 +450,8 @@ local function UpdateTerrain(continent, north, west)
     local tilePx = TILE_YARDS * db.size / db.span          -- en flises kant på skærmen
     local cx, cy = 32 - west / TILE_YARDS, 32 - north / TILE_YARDS
     local half = db.span / TILE_YARDS / 2                  -- den halve ramme målt i fliser
+    -- En drejet firkant når længere ud i hjørnerne (√2); cirklen gør ikke.
+    if viewAngle ~= 0 and db.shape ~= "round" then half = half * 1.4143 end
     local count = 0
     for col = max(0, floor(cx - half)), min(63, floor(cx + half)) do
         for row = max(0, floor(cy - half)), min(63, floor(cy + half)) do
@@ -445,7 +467,12 @@ local function UpdateTerrain(continent, north, west)
                     tex:SetSize(tilePx, tilePx)
                     tex.px = tilePx
                 end
-                tex:SetPoint("TOPLEFT", canvas, "CENTER", (col - cx) * tilePx, -(row - cy) * tilePx)
+                if tex.angle ~= viewAngle and tex.SetRotation then
+                    tex:SetRotation(-viewAngle)                -- SetRotation drejer mod uret
+                    tex.angle = viewAngle
+                end
+                tex:SetPoint("CENTER", canvas, "CENTER",
+                    ToScreen((col + 0.5 - cx) * tilePx, -(row + 0.5 - cy) * tilePx))
                 if not tex.shown then
                     tex:Show()
                     tex.shown = true
@@ -753,8 +780,8 @@ local function UpdatePins(continent, north, west)
     for i = 1, recordCount do
         local rec = records[i]
         if rec.continent == continent then
-            local x = (west - rec.west) * pxPerYard        -- øst er til højre
-            local y = (rec.north - north) * pxPerYard      -- nord er opad
+            -- øst er til højre og nord opad, før kortet evt. drejes
+            local x, y = ToScreen((west - rec.west) * pxPerYard, (rec.north - north) * pxPerYard)
             local inside
             if roundShape then
                 inside = x * x + y * y <= reach * reach
@@ -802,7 +829,277 @@ local function UpdatePins(continent, north, west)
 end
 
 --------------------------------------------------------------------------------
--- 8. Gennemsigtighed og fading i combat
+-- 8. Korteste rute gennem quest-målene
+--
+-- En streg fra spilleren gennem alle mål (mobs, ting, steder) i rammen, i den
+-- rækkefølge der giver kortest vej. Det er «den handelsrejsendes problem»:
+--   1. nærmeste nabo: gå hele tiden til det nærmeste mål, der mangler
+--   2. 2-opt: vend et stykke af ruten, hvis det fjerner en krydsning
+--   3. or-opt: flyt ét mål til et andet sted i rækken, hvis det forkorter
+--   4. med højst 8 mål: prøv alle rækkefølger, der kan slå den fundne
+-- Op til 8 mål er ruten altså den korteste, der findes. Med flere er den et
+-- godt bud (typisk få procent fra den korteste), fundet på under et millisekund.
+-- (En ret linje fra lineær regression ville gå gennem punktsværmen, ikke forbi
+-- hvert mål – den kan man ikke følge.)
+--
+-- Et mål, man har stået ved, tages ud af ruten i nogle minutter. Ellers ville
+-- stregen pege tilbage på det, så snart man gik videre.
+--------------------------------------------------------------------------------
+
+local ROUTE_MAX_NODES = 40         -- kun de nærmeste mål regnes med
+local ROUTE_EXACT_NODES = 8        -- så mange mål kan alle rækkefølger prøves for (8! = 40.320)
+local ROUTE_MERGE_YARDS = 8        -- mål tættere end det er ét stop
+local ROUTE_VISIT_YARDS = 15       -- så tæt på = besøgt
+local ROUTE_VISIT_SECONDS = 180    -- så længe holdes et besøgt mål ude (ca. en respawn)
+
+local routeNorth, routeWest = {}, {}   -- rutens stop i rækkefølge (verdenskoordinater)
+local routeCount = 0
+local routeYards = 0                   -- rutens længde, til /d2map status
+local routeLines = {}                  -- genbrugte linjer
+local visited = {}                     -- stop-nøgle → tidspunkt for besøget
+
+-- Arbejdstabeller, genbrugt mellem beregninger.
+local candNorth, candWest, candDist, candOrder = {}, {}, {}, {}
+local nodeNorth, nodeWest, tour, used = {}, {}, {}, {}
+
+local function ByDistance(a, b)
+    return candDist[a] < candDist[b]
+end
+
+local function NodeDistance(a, b)
+    local dn, dw = nodeNorth[a] - nodeNorth[b], nodeWest[a] - nodeWest[b]
+    return sqrt(dn * dn + dw * dw)
+end
+
+-- Et stop genkendes på sin plads, afrundet til hele yards.
+local function VisitKey(north, west)
+    return floor(north + 0.5) * 100000 + floor(west + 0.5)
+end
+
+-- 2-opt: vend stykket tour[i..j], hvis ruten bliver kortere. Punkt 1 er
+-- spilleren og ligger fast; ruten er åben (man skal ikke tilbage til start).
+local function TwoOpt(m)
+    local improved = false
+    for i = 2, m - 1 do
+        for j = i + 1, m do
+            local before, first, last, after = tour[i - 1], tour[i], tour[j], tour[j + 1]
+            local delta = NodeDistance(before, last) - NodeDistance(before, first)
+            if after then
+                delta = delta + NodeDistance(first, after) - NodeDistance(last, after)
+            end
+            if delta < -0.01 then
+                local low, high = i, j
+                while low < high do
+                    tour[low], tour[high] = tour[high], tour[low]
+                    low, high = low + 1, high - 1
+                end
+                improved = true
+            end
+        end
+    end
+    return improved
+end
+
+-- Or-opt: tag ét stop ud og sæt det ind et andet sted, hvis det forkorter.
+local function OrOpt(m)
+    local improved = false
+    for i = 2, m do
+        local node, before, after = tour[i], tour[i - 1], tour[i + 1]
+        -- det, der spares ved at tage stoppet ud
+        local saved = NodeDistance(before, node)
+        if after then saved = saved + NodeDistance(node, after) - NodeDistance(before, after) end
+        local bestGain, bestAt = 0.01, nil
+        for j = 1, m do
+            if j ~= i and j ~= i - 1 then                  -- mellem tour[j] og tour[j + 1]
+                local left, right = tour[j], tour[j + 1]
+                local added = NodeDistance(left, node)
+                if right then added = added + NodeDistance(node, right) - NodeDistance(left, right) end
+                if saved - added > bestGain then bestGain, bestAt = saved - added, j end
+            end
+        end
+        if bestAt then
+            table.remove(tour, i)
+            if bestAt > i then bestAt = bestAt - 1 end     -- alt efter i er rykket én ned
+            table.insert(tour, bestAt + 1, node)
+            improved = true
+        end
+    end
+    return improved
+end
+
+-- Udtømmende søgning med afskæring: en delrute forfølges ikke, hvis den ikke
+-- kan slå den bedste kendte. «Kan ikke» afgøres med en nedre grænse: hvert mål,
+-- der mangler, koster mindst afstanden til sin nærmeste nabo (exactMin), og
+-- rest er summen af dem. Søgningen starter fra den rute, trin 1-3 fandt, så det
+-- meste skæres væk med det samme.
+local exactBest, exactFound = 0, false
+local exactPath, exactBestPath, exactUsed, exactMin = {}, {}, {}, {}
+
+local function ExactSearch(depth, m, last, length, rest)
+    if length + rest >= exactBest then return end
+    if depth > m then
+        exactBest, exactFound = length, true
+        for k = 2, m do exactBestPath[k] = exactPath[k] end
+        return
+    end
+    for k = 2, m do
+        if not exactUsed[k] then
+            exactUsed[k], exactPath[depth] = true, k
+            ExactSearch(depth + 1, m, k, length + NodeDistance(last, k), rest - exactMin[k])
+            exactUsed[k] = false
+        end
+    end
+end
+
+-- Regner ruten ud fra spillerens plads. Kaldes, når pins er hentet (ca. 1/sek.).
+local function BuildRoute(continent, north, west)
+    routeCount, routeYards = 0, 0
+    if not db.route or recordCount == 0 then return end
+
+    local now = GetTime and GetTime() or 0
+    for key, when in pairs(visited) do
+        if now - when > ROUTE_VISIT_SECONDS then visited[key] = nil end
+    end
+
+    -- Mål inden for rammen. En firkantet ramme når længere ud i hjørnerne.
+    local radius = db.span / 2 * (PIN_REACH[db.shape] or 0.9)
+    if db.shape ~= "round" then radius = radius * 1.4143 end
+    local found = 0
+    for i = 1, recordCount do
+        local rec = records[i]
+        if rec.continent == continent and rec.kind == "objective" then
+            local dn, dw = rec.north - north, rec.west - west
+            local dist = dn * dn + dw * dw
+            if dist <= radius * radius then
+                local key = VisitKey(rec.north, rec.west)
+                if dist <= ROUTE_VISIT_YARDS * ROUTE_VISIT_YARDS then visited[key] = now end
+                if not visited[key] then
+                    local merged = false
+                    for j = 1, found do
+                        local a, b = candNorth[j] - rec.north, candWest[j] - rec.west
+                        if a * a + b * b <= ROUTE_MERGE_YARDS * ROUTE_MERGE_YARDS then
+                            merged = true
+                            break
+                        end
+                    end
+                    if not merged then
+                        found = found + 1
+                        candNorth[found], candWest[found], candDist[found] = rec.north, rec.west, dist
+                    end
+                end
+            end
+        end
+    end
+    if found == 0 then return end
+
+    -- De nærmeste først; resten skæres fra.
+    for i = 1, found do candOrder[i] = i end
+    for i = found + 1, #candOrder do candOrder[i] = nil end
+    table.sort(candOrder, ByDistance)
+
+    -- Punkt 1 er spilleren, 2..m er målene.
+    local m = min(found, ROUTE_MAX_NODES) + 1
+    nodeNorth[1], nodeWest[1] = north, west
+    for k = 2, m do
+        local c = candOrder[k - 1]
+        nodeNorth[k], nodeWest[k] = candNorth[c], candWest[c]
+    end
+
+    -- 1. Nærmeste nabo.
+    for k = 1, m do used[k] = false end
+    for k = m + 1, #tour do tour[k] = nil end
+    tour[1], used[1] = 1, true
+    for step = 2, m do
+        local last, best, bestDist = tour[step - 1], nil, nil
+        for k = 2, m do
+            if not used[k] then
+                local d = NodeDistance(last, k)
+                if not bestDist or d < bestDist then best, bestDist = k, d end
+            end
+        end
+        tour[step], used[best] = best, true
+    end
+
+    -- 2. og 3. Forbedr, til intet hjælper (eller 20 runder, så det altid slutter).
+    for _ = 1, 20 do
+        local a = TwoOpt(m)
+        local b = OrOpt(m)
+        if not (a or b) then break end
+    end
+
+    -- 4. Få mål: find den korteste af alle rækkefølger.
+    if m - 1 <= ROUTE_EXACT_NODES then
+        local length, rest = 0, 0
+        for k = 2, m do
+            length = length + NodeDistance(tour[k - 1], tour[k])
+            exactUsed[k] = false
+            local nearest
+            for j = 1, m do
+                if j ~= k then
+                    local d = NodeDistance(k, j)
+                    if not nearest or d < nearest then nearest = d end
+                end
+            end
+            exactMin[k] = nearest
+            rest = rest + nearest
+        end
+        exactBest, exactFound = length - 0.01, false       -- kun en rute, der er rigtigt kortere
+        ExactSearch(2, m, 1, 0, rest)
+        if exactFound then
+            for k = 2, m do tour[k] = exactBestPath[k] end
+        end
+    end
+
+    routeCount = m - 1
+    for k = 2, m do
+        routeNorth[k - 1], routeWest[k - 1] = nodeNorth[tour[k]], nodeWest[tour[k]]
+        routeYards = routeYards + NodeDistance(tour[k - 1], tour[k])
+    end
+end
+
+local function AcquireLine(index)
+    local line = routeLines[index]
+    if line then return line end
+    line = pinLayer:CreateLine(nil, "BORDER")              -- under pins (ARTWORK)
+    if index == 1 then
+        -- Første stykke – «gå herhen nu» – er tykkere og lysere.
+        line:SetThickness(3)
+        line:SetColorTexture(1.00, 0.93, 0.55, 0.95)
+    else
+        line:SetThickness(2)
+        line:SetColorTexture(0.86, 0.68, 0.25, 0.70)
+    end
+    routeLines[index] = line
+    return line
+end
+
+-- Flytter rutens linjer i forhold til spilleren. Kaldes ved hver opdatering.
+local function UpdateRoute(north, west)
+    local count = (db.route and pinLayer.CreateLine) and routeCount or 0
+    local pxPerYard = db.size / db.span
+    local fromX, fromY = 0, 0                              -- spilleren står i midten
+    for i = 1, count do
+        local x, y = ToScreen((west - routeWest[i]) * pxPerYard, (routeNorth[i] - north) * pxPerYard)
+        local line = AcquireLine(i)
+        line:SetStartPoint("CENTER", pinLayer, fromX, fromY)
+        line:SetEndPoint("CENTER", pinLayer, x, y)
+        if not line.shown then
+            line:Show()
+            line.shown = true
+        end
+        fromX, fromY = x, y
+    end
+    for i = count + 1, #routeLines do
+        local line = routeLines[i]
+        if line.shown then
+            line:Hide()
+            line.shown = false
+        end
+    end
+end
+
+--------------------------------------------------------------------------------
+-- 9. Gennemsigtighed og fading i combat
 --
 -- Terrænet får den valgte gennemsigtighed; pins og pilen er pinBoost gange mere
 -- synlige (ellers drukner de). I combat glider begge ned til combatOpacity.
@@ -849,7 +1146,7 @@ local function SnapAlpha()
 end
 
 --------------------------------------------------------------------------------
--- 9. Opdateringsløkken
+-- 10. Opdateringsløkken
 --
 -- OnUpdate sidder på root, så et skjult automap koster ingenting. Fliser og
 -- pins opdateres hvert updateInterval sekund (0,1 som standard), ikke hver frame.
@@ -857,6 +1154,7 @@ end
 
 local sinceTick, sinceSync = 0, 0
 local hasPosition = nil        -- nil = ukendt, true/false = sidste opdatering
+local lastFacing = nil         -- figurens retning ved sidste opdatering
 local tickFailed = false
 
 local function Tick(elapsed)
@@ -877,22 +1175,32 @@ local function Tick(elapsed)
         hasPosition = true
     end
 
+    -- Kortets drejning i denne opdatering: figurens retning, eller nord opad.
+    local facing = PlayerFacing()
+    lastFacing = facing
+    SetViewAngle(db.rotate and facing or 0)
+
     UpdateTerrain(continent, north, west)
 
     sinceSync = sinceSync + elapsed
     if forceSync or sinceSync >= db.pinSyncInterval then
         sinceSync = 0
         SyncPins()
+        BuildRoute(continent, north, west)
     end
     UpdatePins(continent, north, west)
+    UpdateRoute(north, west)
 
-    local facing = PlayerFacing()
-    if facing and arrow.SetRotation then arrow:SetRotation(facing) end
+    -- Pilen viser figurens retning på kortet: lige op, når kortet drejer med.
+    if arrow.SetRotation then arrow:SetRotation((facing or 0) - viewAngle) end
 end
 
 local function OnUpdate(_, elapsed)
     UpdateFade(elapsed)
     sinceTick = sinceTick + elapsed
+    -- Et kort, der drejer i ti hak i sekundet, ser hakkende ud. Mens figuren
+    -- drejer, opdateres der derfor hver frame; står den stille, er takten som før.
+    if db.rotate and PlayerFacing() ~= lastFacing then forceTick = true end
     if not forceTick and sinceTick < db.updateInterval then return end
     local passed = sinceTick
     sinceTick = 0
@@ -923,20 +1231,20 @@ local function ApplyEnabled()
 end
 
 --------------------------------------------------------------------------------
--- 10. Indstillinger: ét sted, hvor en værdi sættes
+-- 11. Indstillinger: ét sted, hvor en værdi sættes
 --
 -- Indstillingsvinduet, slash-kommandoerne og tastaturgenvejene går alle gennem
 -- Set(), så de aldrig kommer ud af trit: ændrer man noget ét sted, følger de
 -- andre med.
 --------------------------------------------------------------------------------
 
-local RefreshOptions = function() end      -- erstattes i afsnit 11, når vinduet er bygget
+local RefreshOptions = function() end      -- erstattes i afsnit 12, når vinduet er bygget
 
 local function Redraw() forceTick = true end
 local function Resync() forceSync = true forceTick = true end
 
 -- Hvad der skal ske, når en indstilling har fået ny værdi. Gennemsigtighed står
--- her ikke: toningen (afsnit 8) finder selv det nye mål.
+-- her ikke: toningen (afsnit 9) finder selv det nye mål.
 local AFTER = {
     enabled  = ApplyEnabled,
     size     = ApplyLayout,
@@ -947,6 +1255,8 @@ local AFTER = {
     pinScale = Redraw,
     edgePins = Redraw,
     terrain  = Redraw,
+    rotate   = Redraw,
+    route    = Resync,
     pins     = Resync,
     source   = Resync,
 }
@@ -991,7 +1301,7 @@ local function ResetAll()
 end
 
 --------------------------------------------------------------------------------
--- 11. Indstillingsvinduet (/d2map)
+-- 12. Indstillingsvinduet (/d2map)
 --
 -- Et lille vindue med afkrydsningsfelter, skydere og valg. Alt virker med det
 -- samme, så man kan se automappet ændre sig, mens man trækker. Vinduet bygges
@@ -1137,13 +1447,16 @@ local function CreateOptions()
         return ("Size: %d pixels"):format(v)
     end)
 
+    byKey.rotate = MakeCheck(frame, Row(30), "Rotate map to the way I'm facing", "rotate")
+
     byKey.pins = MakeChoice(frame, Row(28), "Pins", "pins", {
         { "all", "All" }, { "objectives", "Objectives" }, { "off", "Off" },
     })
     byKey.pinScale = MakeSlider(frame, Row(42), "pinScale", LIMITS.pinScale[1], LIMITS.pinScale[2], 0.1, function(v)
         return ("Pin size: %.1fx"):format(v)
     end)
-    byKey.edgePins = MakeCheck(frame, Row(30), "Show nearest off-map objective on the rim", "edgePins")
+    byKey.edgePins = MakeCheck(frame, Row(26), "Show nearest off-map objective on the rim", "edgePins")
+    byKey.route = MakeCheck(frame, Row(30), "Draw shortest route through objectives", "route")
 
     byKey.terrain = MakeCheck(frame, Row(26), "Show terrain (minimap tiles)", "terrain")
     byKey.style = MakeChoice(frame, Row(26), "Look", "style", {
@@ -1196,7 +1509,7 @@ local function ToggleOptions()
 end
 
 --------------------------------------------------------------------------------
--- 12. Offentlig API, tastaturgenveje og slash-kommandoer
+-- 13. Offentlig API, tastaturgenveje og slash-kommandoer
 --------------------------------------------------------------------------------
 
 -- Globale navne: bruges af Bindings.xml og af andre addons.
@@ -1291,6 +1604,8 @@ local function PrintHelp()
         "/d2map pins <all|objectives|off> – which quest pins (now " .. db.pins .. ")",
         "/d2map pinsize <0.5-3> – pin scale (now " .. db.pinScale .. ")",
         "/d2map edge <on|off> – nearest off-map objective on the rim (now " .. OnOff(db.edgePins) .. ")",
+        "/d2map route <on|off> – shortest route through the objectives (now " .. OnOff(db.route) .. ")",
+        "/d2map rotate <on|off> – turn the map to the way you face (now " .. OnOff(db.rotate) .. ")",
         "/d2map terrain <on|off> – minimap tiles (now " .. OnOff(db.terrain) .. ")",
         "/d2map source <auto|questie|blizzard> – where pins come from (now " .. db.source .. ")",
         "/d2map bind [key] – put a key on toggle (Alt+M if none given)",
@@ -1318,6 +1633,8 @@ local function PrintStatus()
     end
     Print(("pins: %s, source %s, %d known, %d drawn%s"):format(
         db.pins, activeAdapterName, recordCount, pinsShown, mask and "" or "; no mask support, using hard edges"))
+    Print(("route: %s, %d stops, %.0f yards; map %s"):format(
+        OnOff(db.route), routeCount, routeYards, db.rotate and "rotates with you" or "north up"))
     if tickFailed then Print("the update loop is stopped after an error – /d2map toggle twice to retry.") end
 end
 
@@ -1404,6 +1721,8 @@ commands.pins = function(rest) SetChoice("pins", rest, PIN_MODES, "pins") end
 commands.pinsize = function(rest) SetNumber("pinScale", rest, "pinsize") end
 commands.edge = function(rest) SetFlag("edgePins", rest, "edge pins") end
 commands.terrain = function(rest) SetFlag("terrain", rest, "terrain") end
+commands.route = function(rest) SetFlag("route", rest, "route") end
+commands.rotate = function(rest) SetFlag("rotate", rest, "rotate") end
 commands.source = function(rest) SetChoice("source", rest, SOURCES, "source") end
 
 commands.unlock = function()
@@ -1466,7 +1785,7 @@ SLASH_D2MAP2 = "/automap"
 SlashCmdList["D2MAP"] = SlashHandler
 
 --------------------------------------------------------------------------------
--- 13. Events
+-- 14. Events
 --------------------------------------------------------------------------------
 
 local events = CreateFrame("Frame")
