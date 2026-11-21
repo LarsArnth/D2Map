@@ -7,7 +7,7 @@ bevægelse og targeting går lige igennem.
 
 ```sh
 ./installer.sh        # kopierer D2Map/ ind i spillets AddOns-mappe
-lua test/koer.lua     # 224 tjek mod en attrap af WoW's API
+lua test/koer.lua     # 219 tjek mod en attrap af WoW's API
 lua test/tegn.lua     # tegner pull-ruterne for nogle prøvesæt til docs/former.svg
 ```
 
@@ -32,7 +32,7 @@ ajour:
 | `/d2map style <color\|sepia\|ghost>` | `ghost` lægger terrænet additivt ovenpå, mest som i Diablo II |
 | `/d2map pins <all\|objectives\|off>` | Alle Questies pins, kun mål og afleveringer, eller ingen |
 | `/d2map pinsize <0.5-3>` | Størrelse på pins |
-| `/d2map ore <mine\|all\|off>` | Malmårer: dem, figurens Mining-skill rækker til (standard), alle, eller ingen |
+| `/d2map ore <on\|off>` | Malmårer, der står fremme nu, aflæst af Forever Dual Gathering (til som standard) |
 | `/d2map rim <on\|off>` | Det, der ligger uden for rammen, som mærker på kanten: nærmeste pin for hver quest og guidens mål (fra som standard) |
 | `/d2map route <on\|off>` | En pull-rute gennem hver klynge af quest-mål (til som standard) |
 | `/d2map focus <on\|off>` | Pull-ruter kun om de quests, Factoruides aktuelle trin handler om (til som standard; uden guide: alle quests) |
@@ -104,38 +104,28 @@ En ny bruger ser altså ingenting, før figuren flytter sig.
   og `hidden` (Questies egne filtre). Adapteren læser kun; zone → verden huskes
   pr. ikon. Uden Questie bruges spillets egne quest-punkter
   (`C_QuestLog.GetQuestsOnMap`).
-- **Malmårer** (afsnit 6b, version 1.8.0; Lars: «er begyndt at mine»).
-  Spillet fortæller ikke addons, hvilke årer der står fremme (minimappets gule
-  prikker kan ikke læses), så automappet viser *pladserne*, hvor en åre kan
-  stå – som GatherMate. De kommer fra Questies database: QuestieDB har hver
-  slags åre som et objekt, og `LibQuestieDB.Object.Get(id, "spawns")` giver
-  `{ [zone] = { { x, y }, … } }` i procent af zonekortet (ca. 14.000 punkter
-  for de 12 slags; id'erne i `ORES` er tjekket mod databasens navne). Zonen
-  (et areaID) bliver til et kort med `ZoneDB:GetUiMapIdByAreaId` fra Questies
-  moduler, og fordi et zonekort er en ret firkant i verden, regnes alle
-  zonens punkter om ud fra to hjørner. Hver slags hentes først, når den skal
-  vises, én slags pr. opdatering, og kun én gang. Mange pladser deles af
-  flere slags (sølv/guld står, hvor der ellers er tin/jern/mithril): der
-  tegnes ét mærke pr. plads, i farven for den almindelige slags med det
-  højeste krav, figuren kan mine. Mærket er en rude (`Media/node.tga`) farvet
-  pr. slags: kobber orange, tin grå, sølv hvid, jern blå, guld gul, mithril
-  lyseblå, truesilver turkis, dark iron rød, thorium grøn.
-  **Skill:** med «My skill» (standard) vises kun årer, figurens Mining rækker
-  til. Tallet læses højst hvert 5. sekund, først som TradeSkillMaster gør på
-  Forever: **alle** pladser fra `GetProfessions` med `GetProfessionInfo`
-  (1.8.0 så kun på de to første og fandt ikke Lars' Mining 151 – ingen årer).
-  Derefter `C_SkillInfo.GetSkillLineInfoByID(186)`,
-  `C_TradeSkillUI.GetProfessionInfoBySkillLineID` og skill-listen. Ingen årer
-  vises kun, når professions kunne læses helt, og Mining ikke var der; ved
-  tvivl vises alle hellere end ingen. `/d2map status` skriver, hvad der blev
-  fundet («Mining 151»), og første gang årerne er hentet, står det i chatten.
-  **Diagnose:** `D2MapDB.oreDiag` i figurens
-  `WTF/Account/*/<realm>/<figur>/SavedVariables/D2Map.lua` har hvert
-  skill-forsøg, hvad hver slags åre gav pr. kontinent, og om Questies database
-  og ZoneDB fandtes. Skrives ved `/reload` og log ud – læs den, før du gætter.
-  Malmen ligger efter quest-pins i samme liste (`kind = "node"`), så den aldrig
-  tager pladsen fra dem, og den indgår hverken i pull-ruter eller på kanten.
-  Uden Questie er der ingen malm – det er dens database.
+- **Malmårer** (afsnit 6b, version 1.9.0). Kun årer, der står fremme **lige
+  nu** (Lars, 2026-11-21: «ikke hvor de kunne være»). Spillet fortæller ikke
+  addons, hvor minimappets gule prikker er; de kan kun aflæses ved at holde
+  musen over minimappet og læse tooltippen. Det gør **Forever Dual Gathering**
+  (FDG), også med sin egen HUD skjult (indstillingen «remember nodes»), og den
+  udleverer sine fund med `_G.FDGWorldMarkersNodeSource()` → `nodes`, en liste
+  af `{ map = uiMapID, x, y (0-1), kind = "ore"|"herb"|…, id = malmens
+  item-id, seen = GetTime(), centered/fastLocation/manualProvisional,
+  missingAt, observationTTL, … }`. D2Map læser kun listen og tegner en rude pr.
+  `kind == "ore"`, der er live efter FDG's egne regler (målt placering, set
+  inden for levetiden) og desuden: ikke `missingAt`, højst 60 s gammel, og ikke
+  lige mined. **Uden FDG slået til på figuren: ingen årer.**
+  **Hurtigt væk efter mining** (Lars: «så hurtigt som muligt efter den er
+  mined»): FDG fjerner selv fundet ved høst og ved et tomt tjek, men D2Map
+  venter ikke på det: `UNIT_SPELLCAST_SUCCEEDED` for spilleren med Mining
+  (2575/2576/3564/10248 eller navnet «Mining») gemmer stedet, åren inden for
+  10 yards skjules i samme frame, og pins hentes forfra (også efter 0,5 s). Ser
+  FDG åren igen senere (`seen` efter castet), er den groet frem og vises igen.
+  Farverne følger item-id'et: kobber orange, tin grå, sølv hvid, jern blå, guld
+  gul, mithril lyseblå, truesilver turkis, thorium grøn, dark iron rød, resten
+  lilla. 1.8.x viste i stedet *pladser* fra Questies database – det duede
+  ikke (og Questie har ingen malm i Forevers nye zoner som Riverglades).
 - **To takter.** Pins *hentes* fra adapteren én gang i sekundet og *flyttes*
   hvert 0,1 sekund. `OnUpdate` sidder på selve rammen, så et skjult automap
   koster ingenting.
@@ -253,9 +243,9 @@ skiftes ud (ingen `C_Map`), og fliserne skal hentes med sti i stedet for fil-id.
 Lars' skærmbilleder og tilbagemeldinger 2026-11-11: terræn, bløde runde kanter,
 Questies pins og spillerens pil (1.0), indstillingsvinduet (1.1), klyngeformerne
 (1.3), guidens vej (1.4) og den lyse grønne prik (1.5.1) virker. Ikke set i
-spillet endnu: malmårerne og opslaget i Questies nye modul (1.8.0, kun prøvet
-mod attrappen – især er det ikke bekræftet, hvilken af de fire måder at læse
-Mining-skill på Forever svarer på), det samlede flueben for kanten (1.6.0), stregen til Shortest
+spillet endnu: live-årerne fra Forever Dual Gathering (1.9.0, kun prøvet mod
+en attrap – især om Mining-castet har et af de kendte spell-id'er) og opslaget
+i Questies nye modul (1.8.0), det samlede flueben for kanten (1.6.0), stregen til Shortest
 Path Forevers næste knæk (1.6.1) og begrænsningen til guidens aktuelle trin
 (1.7.0). Pull-ruterne (1.6.0) er set i spillet, men ikke gennemprøvet – især
 klyngernes lænkeafstand er et gæt, indtil den er set mod flere af Questies

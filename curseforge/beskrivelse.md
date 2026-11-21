@@ -7,7 +7,7 @@ Out of the box the map is hidden while you stand still and fades in when you mov
 ## What it shows
 
 - **Quest pins** from Questie around your character, with Questie's own icons, colours and filters.
-- **Mining veins**: the places ore can spawn, as small coloured diamonds, one colour per ore. By default only the veins your Mining skill can handle, and nothing on a character without Mining.
+- **Mining veins** that are up right now, as small coloured diamonds, one colour per ore. They come from Forever Dual Gathering, which reads them off the minimap, and vanish as soon as you mine them.
 - **Pull routes**: a short loop through each group of quest objectives, placed so that every target is within pull range (40 yards by default). Run the loop and pull from it instead of walking up to every mob. A small camp becomes a single spot to stand on. With Factoruide, routes are drawn only for the quests in the guide's current step.
 - **The guide path** as a bright dotted line: Factoruide's planned walk to its next place, the next turn of a Shortest Path Forever journey, or simply the game's own waypoint.
 - **Out-of-range markers** (optional, off by default): quest targets and the guide's goal that are off the map shown as small markers on the rim.
@@ -28,7 +28,8 @@ Settings are saved per character.
 
 ## Works with
 
-- **Questie** (optional): quest pins, and the spawn places for mining veins. Without Questie, D2Map falls back to the game's own quest markers, one per quest, and shows no veins.
+- **Questie** (optional): quest pins. Without Questie, D2Map falls back to the game's own quest markers, one per quest.
+- **Forever Dual Gathering** (optional): live mining veins.
 - **Factoruide Guide** (optional): the guide path.
 - **Shortest Path Forever** (optional): the line to the next turn of its journey.
 

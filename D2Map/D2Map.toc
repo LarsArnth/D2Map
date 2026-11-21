@@ -1,12 +1,12 @@
 ## Interface: 16001
 ## Title: |cffc8a04bD2|rMap
-## Notes: Diablo II-style automap: a click-through, see-through terrain map in the middle of the screen with Questie's quest pins and mining veins. /d2map
+## Notes: Diablo II-style automap: a click-through, see-through terrain map in the middle of the screen with Questie's quest pins and the mining veins that are up right now. /d2map
 ## Author: Lars Arnth
-## Version: 1.8.1
+## Version: 1.9.0
 ## Category: Map
 ## X-Category: Map
 ## IconTexture: Interface\Icons\INV_Misc_Map_01
-## OptionalDeps: Questie, QuestieDB, Factoruide_Guide, ShortestPathForever
+## OptionalDeps: Questie, ForeverDualGathering, Factoruide_Guide, ShortestPathForever
 ## SavedVariablesPerCharacter: D2MapDB
 ## X-Curse-Project-ID: 1798915
 ## X-License: MIT (code); tile table from OpenMap (MIT); map art is Blizzard's

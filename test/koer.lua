@@ -231,7 +231,7 @@ tjek("standard: synlig i bevægelse (54 %), ingen combat-toning", D2MapDB.moveFa
 tjek("standard: 650 yards, drejer med figuren, sepia", D2MapDB.span == 650 and D2MapDB.rotate == true and D2MapDB.style == "sepia")
 tjek("standard: intet på kanten for det, der er uden for rammen", D2MapDB.edgePins == false)
 tjek("terræn er slået fra som standard", D2MapDB.terrain == false)
-tjek("standard: malmårer efter figurens egen Mining-skill", D2MapDB.ore == "mine")
+tjek("standard: malmårer (live) slået til", D2MapDB.ore == "on")
 fyr("PLAYER_LOGIN")
 fyr("PLAYER_ENTERING_WORLD")
 
@@ -1009,7 +1009,7 @@ spiller.retning = 1.25
 slash("rotate off")
 slash("source auto")
 
-print("Malmårer")
+print("Malmårer, der står fremme nu (fra Forever Dual Gathering)")
 local RUDE = "Interface\\AddOns\\D2Map\\Media\\node.tga"
 local function aarer()
     local t = {}
@@ -1028,141 +1028,100 @@ local function sidsteStatus(tekst)
     end
     return false, "ingen linje om ore veins"
 end
--- En attrap af Questies database: objektets id → spawns = { [zone] = { { x, y }, … } } i procent.
-local function plads(nord, oest)
+-- Et fund, som FDG har det: zonekort, x og y fra 0 til 1, slags, malmens item-id og hvornår det sidst blev set.
+local function fund(nord, oest, felter)
     local x, y = zonePunkt(nord, oest)
-    return { x, y }
+    local f = { map = ZONE.id, x = x / 100, y = y / 100, kind = "ore", id = 2770, seen = ur, centered = true }
+    for k, v in pairs(felter or {}) do f[k] = v end
+    return f
 end
-local spawns = {
-    -- Kobber: to pladser i rammen, én lige uden for, én langt væk, én på et ukendt kort og én i en instance.
-    [1731] = { [12] = { plads(60, 20), plads(-80, 40), plads(0, 290), plads(0, 1500) }, [9999] = { { 50, 50 } }, [1337] = { { -1, -1 } } },
-    [1732] = { [12] = { plads(60, 20), plads(100, -100) } },      -- tin: deler den første plads med kobber
-    [1733] = { [12] = { plads(100, -100), plads(-150, -50) } },   -- sølv: deler plads med tin og har én selv
-    [1735] = { [12] = { plads(30, 150) } },                       -- jern
-}
-local hentet = 0
-LibQuestieDB = { Object = { Get = function(id, felt)
-    assert(felt == "spawns", "D2Map må kun læse spawns")
-    hentet = hentet + 1
-    return spawns[id]
-end } }
-local zonerKlar = false
-QuestieLoader._modules.ZoneDB = { GetUiMapIdByAreaId = function(_, omraade)
-    if not zonerKlar then error("ZoneDB er ikke startet endnu") end
-    if omraade == 12 then return ZONE.id end
-    if omraade == 9999 then return 9999 end
-end }
 slash("pins off")                                      -- kun malmen, og den må ikke afhænge af quest-pins
--- En figur med Skinning og Cooking: professions kan læses, og Mining er ikke blandt dem.
-GetProfessions = function() return 5, nil, nil, nil, 9 end
-GetProfessionInfo = function(nr)
-    if nr == 9 then return "Cooking", "ikon", 50, 75, 1, 0, 185, 0 end
-    return "Skinning", "ikon", 10, 75, 1, 0, 393, 0
-end
-ur = ur + 6                                            -- skill læses højst hvert 5. sekund
 kor(1.2)
-tjek("uden Mining vises ingen årer", #aarer() == 0 and hentet == 0, #aarer())
-tjek("…og status forklarer hvorfor", sidsteStatus("has no Mining"))
-tjek("diagnosen i D2MapDB viser, hvad der blev læst", D2MapDB.oreDiag and D2MapDB.oreDiag.limit == 0
-    and D2MapDB.oreDiag.skillTries[1]:find("Cooking 50 line 185", 1, true) ~= nil, D2MapDB.oreDiag and D2MapDB.oreDiag.skillTries[1])
-GetProfessions, GetProfessionInfo = nil, nil
-slash("ore all")
+tjek("standard: malmårer slået til", D2MapDB.ore == "on")
+tjek("uden Forever Dual Gathering vises ingen årer", #aarer() == 0)
+tjek("…og status siger, hvad der mangler", sidsteStatus("needs Forever Dual Gathering"))
+local fdg = {}
+FDGWorldMarkersNodeSource = function() return fdg, {}, {} end
+fdg = {
+    fund(60, 20),                                                  -- kobber, målt op: vises
+    fund(-80, 40, { id = 2771, centered = false, fastLocation = true }), -- tin, hurtig placering: vises
+    fund(100, -100, { id = 2775 }),                                -- sølv
+    fund(30, 150, { id = 2772 }),                                  -- jern
+    fund(-150, -50, { id = 3340 }),                                -- en sjælden slags uden egen farve
+    fund(10, 10, { centered = false }),                              -- kun en grov træffer: ikke målt endnu
+    fund(20, -20, { seen = ur - 200 }),                            -- set for over 3 min. siden: væk
+    fund(-20, 20, { kind = "herb", id = 2449 }),                   -- en urt: ikke malm
+    fund(40, -40, { anonymous = true }),                           -- slagsen ikke afgjort
+    fund(-40, -40, { centered = false, manualProvisional = true, cursorSweepObservation = true, seen = ur - 40 }), -- umålt sweep-fund, 40 s gammelt
+    fund(0, 2000),                                                 -- langt uden for rammen
+    fund(50, 50, { map = 9999 }),                                  -- et andet kontinent
+}
 kor(1.2)
-tjek("/d2map ore all, før Questie er startet: ingen årer og ingen fejl", D2MapDB.ore == "all" and #aarer() == 0 and root.synlig)
-tjek("…og status siger, at data mangler", sidsteStatus("no vein data yet"))
-zonerKlar = true
-ur = ur + 6                                            -- databasen prøves igen efter 5 sekunder
-kor(2.5)
-tjek("alle årer i rammen vises, én pr. plads", #aarer() == 5 and #pins() == 5, #aarer())
-local kobber, delt = aareVed(-80, 40), aareVed(60, 20)
+tjek("de live årer i rammen vises, én rude hver", #aarer() == 5 and #pins() == 5, #aarer())
+local kobber = aareVed(60, 20)
 tjek("en åre er en lille rude i malmens farve (kobber: orange)", kobber and kobber.bredde == 13
     and kobber.farve[1] == 1 and taet(kobber.farve[2], 0.58), kobber and kobber.farve[2])
-tjek("en plads delt af kobber og tin får ét mærke: tin (det højeste krav)", delt and taet(delt.farve[1], 0.80)
-    and taet(delt.farve[2], 0.80))
-tjek("sølv viger for tin på en delt plads, men har sin egen (hvid)", taet(aareVed(100, -100).farve[1], 0.80)
-    and aareVed(-150, -50) and aareVed(-150, -50).farve[3] == 1)
-tjek("jern er blåt", aareVed(30, 150) and taet(aareVed(30, 150).farve[1], 0.45))
+tjek("tin er gråt, sølv hvidt, jern blåt", aareVed(-80, 40) and taet(aareVed(-80, 40).farve[1], 0.80)
+    and aareVed(100, -100).farve[3] == 1 and taet(aareVed(30, 150).farve[1], 0.45))
+tjek("en slags uden egen farve får den lilla", aareVed(-150, -50) and taet(aareVed(-150, -50).farve[1], 0.85))
+tjek("umålte, gamle, urter, uafklarede og fjerne fund vises ikke", not aareVed(10, 10) and not aareVed(20, -20)
+    and not aareVed(-20, 20) and not aareVed(40, -40) and not aareVed(-40, -40))
 tjek("årer giver ingen pull-ruter og intet på kanten", #linjer() == 0 and pinVed(280 * 0.90, 0) == nil)
 tjek("teksturen findes i addon'en", io.open("D2Map/Media/node.tga") ~= nil)
-spiller.vest = spiller.vest - 80                       -- 80 yards mod øst
+tjek("status tæller de live årer", sidsteStatus("7 live from Forever Dual Gathering, 5 near you"))
+fdg[1].x = fdg[1].x + 30 / ZONE.bredde                 -- FDG har målt kobberet om: 30 yards længere mod øst
+kor(1.2)
+tjek("flytter FDG en åre, følger ruden med", aareVed(60, 50) ~= nil and aareVed(60, 20) == nil)
+fdg[1].seen = ur - 55
+fdg[3].observationTTL = 20
+fdg[3].seen = ur - 21
+kor(1.2)
+tjek("en åre lever i højst 60 s efter sidste bekræftelse, eller sin egen kortere levetid", aareVed(60, 50) ~= nil and aareVed(100, -100) == nil)
+ur = ur + 6
+kor(1.2)
+tjek("…og er så væk (ikke set igen i 60 s)", aareVed(60, 50) == nil and #aarer() == 3, #aarer())
+ur = ur - 6
+fdg[1].seen = ur
+fdg[4].missingAt = ur
+kor(1.2)
+tjek("savnede FDG åren ved sidste tjek, vises den ikke", aareVed(30, 150) == nil and aareVed(60, 50) ~= nil)
+fdg[4].missingAt = nil
+-- Mine kobberet: gå hen til det (60 nord, 50 øst) og cast Mining.
+local hjemN, hjemV = spiller.nord, spiller.vest
+spiller.nord, spiller.vest = spiller.nord + 58, spiller.vest - 47
 kor(0.12)
-tjek("en åre lige uden for rammen dukker op, når man nærmer sig", aareVed(0, 290 - 80) ~= nil and aareVed(60, 20 - 80) ~= nil)
-spiller.vest = spiller.vest + 80
-local foerHentet = hentet
-ur = ur + 60
-kor(3.2)
-tjek("databasen læses én gang pr. slags, ikke hvert sekund", hentet == foerHentet and hentet > 10, hentet)
-tjek("status tæller pladserne", sidsteStatus("9 spots known on this continent, 6 near you"))
-tjek("diagnosen har hentningerne pr. slags", D2MapDB.oreDiag.builds.Copper == "continent 0: 4" and D2MapDB.oreDiag.known == 9,
-    D2MapDB.oreDiag.builds.Copper)
-local linje = 0
-for _, t in ipairs(chat) do if t:find("mining veins shown", 1, true) then linje = linje + 1 end end
-tjek("én linje i chatten, når årerne er hentet (ikke én pr. sekund)", linje == 1, linje)
-
--- Figurens skill: kun de årer, den rækker til.
-local skill = { skillRank = 30, skillModifier = 0 }
-C_SkillInfo = { GetSkillLineInfoByID = function(linje) return linje == 186 and skill or nil end }
-slash("ore mine")
+fyr("UNIT_SPELLCAST_SUCCEEDED", "player", "cast-1", 2575)
+root.scripts.OnUpdate(root, 0.001)                     -- samme frame som castet
+tjek("et Mining-cast skjuler åren ved figuren med det samme", aareVed(2, 3) == nil and aareVed(-28, 103) ~= nil)
+fyr("UNIT_SPELLCAST_SUCCEEDED", "player", "cast-2", 5019)    -- Shoot: ikke Mining
+fyr("UNIT_SPELLCAST_SUCCEEDED", "party1", "cast-3", 2575)    -- en andens Mining
+spiller.nord, spiller.vest = hjemN, hjemV
 kor(1.2)
-tjek("/d2map ore mine med Mining 30: kun kobber", #aarer() == 2 and aareVed(-80, 40) and taet(aareVed(60, 20).farve[2], 0.58), #aarer())
-tjek("…og status viser tallet", sidsteStatus("Mining 30"))
-skill = { skillRank = 60, skillModifier = 10 }         -- 60 + 10 fra udstyr = 70
+tjek("…og den forbliver væk, også når man går derfra", aareVed(60, 50) == nil and aareVed(30, 150) ~= nil)
+ur = ur + 1
+fdg[1].seen = ur                                       -- FDG ser den igen (groet frem)
 kor(1.2)
-tjek("skill læses ikke oftere end hvert 5. sekund", #aarer() == 2, #aarer())
-ur = ur + 6
+tjek("ser FDG den igen senere, kommer den tilbage", aareVed(60, 50) ~= nil)
+table.remove(fdg, 2)
 kor(1.2)
-tjek("Mining 70 (med bonus): tin kommer til, og den delte plads bliver tin", #aarer() == 3 and aareVed(100, -100)
-    and taet(aareVed(60, 20).farve[2], 0.80), #aarer())
-skill = { rank = 80 }
-ur = ur + 6
+tjek("forsvinder en åre fra FDG's liste, forsvinder ruden", aareVed(-80, 40) == nil)
+FDGWorldMarkersNodeSource = function() error("FDG fejler") end
 kor(1.2)
-tjek("Mining 80: sølv kommer til", #aarer() == 4 and aareVed(-150, -50), #aarer())
-C_SkillInfo = nil
-GetProfessions = function() return 5, nil, 7 end       -- Mining på 3. plads (Forever bruger flere end to)
-GetProfessionInfo = function(nr)
-    if nr == 7 then return "Mining", "ikon", 130, 150, 2, 0, 186, 0 end
-    return "Skinning", "ikon", 10, 75, 1, 0, 393, 0
-end
-ur = ur + 6
-kor(1.2)
-tjek("skill fra GetProfessions, også på 3. plads (130): jern kommer til", #aarer() == 5 and aareVed(30, 150), #aarer())
-GetProfessions, GetProfessionInfo = nil, nil
-GetSpellInfo = function(id) return id == 2575 and "Bergbau" or nil end
-GetNumSkillLines = function() return 3 end
-GetSkillLineInfo = function(nr)
-    if nr == 1 then return "Berufe", true, true, 0, 0, 0, 0 end
-    if nr == 2 then return "Bergbau", false, false, 40, 0, 0, 75 end
-    return "Kochkunst", false, false, 300, 0, 0, 300
-end
-ur = ur + 6
-kor(1.2)
-tjek("skill fra skill-listen, på klientens sprog (40): kun kobber", #aarer() == 2, #aarer())
-GetNumSkillLines, GetSkillLineInfo, GetSpellInfo = nil, nil, nil
-IsPlayerSpell = function(id) return id == 2580 end      -- Find Minerals
-ur = ur + 6
-kor(1.2)
-tjek("kan skill ikke læses, men figuren kan Mining: alle årer", #aarer() == 5 and sidsteStatus("could not be read"), #aarer())
-IsPlayerSpell = function() return HEMMELIG end
-ur = ur + 6
-kor(1.2)
-tjek("kan hverken skill eller spells læses: alle årer hellere end ingen", #aarer() == 5, #aarer())
-IsPlayerSpell = nil
-LibQuestieDB.Object.Get = function() error("databasen fejler") end
-slash("ore all")
-kor(1.2)
-tjek("allerede hentede årer bliver, selv om databasen fejler bagefter", #aarer() == 5 and root.synlig, #aarer())
+tjek("fejler FDG, er der bare ingen årer", #aarer() == 0 and root.synlig and sidsteStatus("gave no data"))
+FDGWorldMarkersNodeSource = function() return fdg end
 slash("ore vrøvl")
-tjek("et ukendt valg ændrer ingenting", D2MapDB.ore == "all")
+tjek("et ukendt valg ændrer ingenting", D2MapDB.ore == "on")
 slash("options")
-tjek("vinduet har et valg for malm, og det følger med", vindue.synlig and felt.ore.buttons[2].afkrydset == true and felt.ore.buttons[1].afkrydset == false)
-felt.ore.buttons[3]:Klik()
+tjek("vinduet har et valg for malm, og det følger med", vindue.synlig and felt.ore.buttons[1].afkrydset == true and felt.ore.buttons[2].afkrydset == false)
+felt.ore.buttons[2]:Klik()
 kor(1.2)
 tjek("valget Off fjerner årerne", D2MapDB.ore == "off" and #aarer() == 0 and sidsteStatus("ore veins: off"))
 felt.ore.buttons[1]:Klik()
 slash("options")
 slash("pins all")
 kor(1.2)
-tjek("quest-pins er tilbage, og årerne med dem", D2MapDB.ore == "mine" and #aarer() == 5 and #pins() >= 6, #pins())
+tjek("quest-pins er tilbage, og årerne med dem", D2MapDB.ore == "on" and #aarer() >= 1 and #pins() > #aarer(), #pins())
+FDGWorldMarkersNodeSource = nil
 
 print("Tastaturgenvej, når Alt+M peger på en addon, der er slået fra")
 bindinger["ALT-M"] = "DandyMap_AUTOMAP"                -- DandyMap er ikke indlæst: handlingen findes ikke
@@ -1195,7 +1154,7 @@ slash("reset")
 tjek("/d2map reset", D2MapDB.opacity == 0 and D2MapDB.span == 650 and D2MapDB.bindingOffered == true
     and D2MapDB.terrain == false and D2MapDB.route == true and D2MapDB.rotate == true and D2MapDB.waypoint == true
     and D2MapDB.moveFade == true and D2MapDB.moveOpacity == 54 and D2MapDB.combatFade == false
-    and D2MapDB.pullRange == 40 and D2MapDB.edgePins == false and D2MapDB.routeFocus == true and D2MapDB.ore == "mine")
+    and D2MapDB.pullRange == 40 and D2MapDB.edgePins == false and D2MapDB.routeFocus == true and D2MapDB.ore == "on")
 -- Med standarderne: usynlig når man står stille, synlig når man går.
 kor(1)
 tjek("standard: usynligt, når man står stille", taet(canvas.alfa, 0) and taet(pinLayer.alfa, 0), canvas.alfa)
@@ -1215,7 +1174,7 @@ assert(loadfile("D2Map/D2Map.lua"))("D2Map", ns)
 rammer[#rammer].scripts.OnEvent(rammer[#rammer], "ADDON_LOADED", "D2Map")
 tjek("forkerte gemte værdier rettes ved indlæsning", D2MapDB.opacity == 0 and D2MapDB.size == 1400
     and D2MapDB.shape == "round" and D2MapDB.span == 433)
-tjek("den første udgaves gemte «terræn til» slås fra én gang", D2MapDB.terrain == false and D2MapDB.settingsVersion == 3)
+tjek("den første udgaves gemte «terræn til» slås fra én gang", D2MapDB.terrain == false and D2MapDB.settingsVersion == 4)
 D2MapDB.terrain = true                                 -- slået til igen af brugeren
 D2MapDB.edgePins = true
 assert(loadfile("D2Map/D2Map.lua"))("D2Map", ns)
@@ -1225,7 +1184,15 @@ tjek("…ligesom kant-mærker, man selv har slået til", D2MapDB.edgePins == tru
 D2MapDB.settingsVersion = 2                            -- gemt af version 1.1-1.5 med kant-mærker til
 assert(loadfile("D2Map/D2Map.lua"))("D2Map", ns)
 rammer[#rammer].scripts.OnEvent(rammer[#rammer], "ADDON_LOADED", "D2Map")
-tjek("gemte kant-mærker fra før 1.6 slås fra én gang", D2MapDB.edgePins == false and D2MapDB.settingsVersion == 3)
+tjek("gemte kant-mærker fra før 1.6 slås fra én gang", D2MapDB.edgePins == false and D2MapDB.settingsVersion == 4)
+D2MapDB.settingsVersion, D2MapDB.ore, D2MapDB.oreDiag = 3, "mine", { known = 1 }   -- gemt af 1.8
+assert(loadfile("D2Map/D2Map.lua"))("D2Map", ns)
+rammer[#rammer].scripts.OnEvent(rammer[#rammer], "ADDON_LOADED", "D2Map")
+tjek("1.8's «mine» bliver til «on», og den gamle diagnose ryddes", D2MapDB.ore == "on" and D2MapDB.oreDiag == nil)
+D2MapDB.settingsVersion, D2MapDB.ore = 3, "off"
+assert(loadfile("D2Map/D2Map.lua"))("D2Map", ns)
+rammer[#rammer].scripts.OnEvent(rammer[#rammer], "ADDON_LOADED", "D2Map")
+tjek("…men et «off» bliver stående", D2MapDB.ore == "off")
 
 print(("\n%d af %d tjek bestod"):format(antal - fejl, antal))
 os.exit(fejl == 0 and 0 or 1)

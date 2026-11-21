@@ -54,7 +54,7 @@ local DEFAULTS = {
     pins           = "all",    -- all | objectives | off
     pinScale       = 1.0,      -- størrelsesfaktor for pins
     pinBoost       = 2.0,      -- pins er så mange gange mere synlige end terrænet
-    ore            = "mine",   -- malmårer: mine (dem, ens Mining-skill rækker til) | all | off
+    ore            = "on",     -- malmårer, der står fremme nu (fra Forever Dual Gathering): on | off
     edgePins       = false,    -- vis det, der ligger uden for rammen, som mærker på kanten:
                                -- nærmeste pin for hver quest, og guidens mål
     route          = true,     -- tegn en pull-rute gennem hver klynge af quest-mål
@@ -71,7 +71,7 @@ local DEFAULTS = {
     pinSyncInterval = 1.0,     -- sekunder mellem at pins hentes fra adapteren
     maxPins        = 200,      -- loft over pins tegnet på én gang
     bindingOffered = false,    -- har vi prøvet at lægge Alt+M på toggle?
-    settingsVersion = 3,       -- se MigrateSettings
+    settingsVersion = 4,       -- se MigrateSettings
 }
 
 -- Tilladte intervaller for de tal, brugeren kan sætte.
@@ -91,7 +91,7 @@ local WHOLE = { opacity = true, combatOpacity = true, moveOpacity = true, size =
 local SHAPES = { round = true, square = true, plain = true }
 local PIN_MODES = { all = true, objectives = true, off = true }
 local SOURCES = { auto = true, questie = true, blizzard = true }
-local ORE_MODES = { mine = true, all = true, off = true }
+local ORE_MODES = { on = true, off = true }
 
 -- Hvordan fliserne farves. "ghost" lægger dem additivt oven på spillet, så
 -- mørke områder forsvinder – det, der ligner Diablo II's automap mest.
@@ -168,6 +168,10 @@ local function MigrateSettings()
     -- slået fra som standard (Lars, 2026-11-11: «ikke vise alle de ting der er
     -- out of range»). Fluebenet i vinduet slår dem til igen.
     if version < 3 then db.edgePins = false end
+    -- Version 4 (1.9.0): malmårerne er kun dem, der står fremme nu. De gamle
+    -- valg «mine» og «all» (pladser fra Questies database) bliver til «on».
+    if version < 4 and db.ore ~= "off" then db.ore = "on" end
+    db.oreDiag = nil                   -- diagnosen fra 1.8.1 bruges ikke længere
     db.settingsVersion = DEFAULTS.settingsVersion
 end
 
@@ -721,342 +725,179 @@ local function ActiveAdapter()
 end
 
 --------------------------------------------------------------------------------
--- 6b. Malmårer (mining nodes)
+-- 6b. Malmårer (mining nodes), der står fremme LIGE NU
 --
--- Stederne, hvor en åre KAN stå, hentes fra Questies database (QuestieDB): hver
--- slags åre er et objekt med «spawns» = { [zone] = { { x, y }, … } } i procent
--- af zonekortet. Spillet fortæller ikke addons, hvilke årer der står fremme
--- lige nu (minimappets gule prikker kan ikke læses), så automappet viser alle
--- pladserne – som GatherMate – og man løber selv forbi og ser efter.
+-- Lars, 2026-11-21: «du skal kun vise LIVE nodes, ikke hvor de kunne være».
+-- Spillet fortæller ikke addons, hvilke årer der står fremme; minimappets gule
+-- prikker kan kun aflæses ved at holde musen over dem og læse tooltippen. Det
+-- gør Forever Dual Gathering (FDG) allerede, også når dens egen HUD er skjult
+-- (indstillingen «remember nodes»), og den udleverer sine fund til andre
+-- addons gennem _G.FDGWorldMarkersNodeSource(). D2Map læser kun dem og tegner
+-- en farvet rude pr. åre. Uden FDG: ingen årer.
 --
--- Som standard vises kun de årer, figurens Mining-skill rækker til; en figur
--- uden Mining ser ingenting. Mange pladser deles af flere slags (sølv står,
--- hvor der ellers er tin eller jern): så tegnes ét mærke i den almindeligste
--- slags' farve. Malmen ligger oven i quest-pins og er uafhængig af, hvilken
--- adapter de kommer fra – men kræver Questie, for det er dens database.
+-- Et fund er { map = uiMapID, x, y (0-1 på zonekortet), kind = "ore"|"herb"|…,
+-- id = malmens item-id, seen = GetTime() ved sidste bekræftelse, … }. Det tæller
+-- som live på samme betingelser, som FDG selv tegner det: placeringen er målt
+-- (centered, fastLocation eller manualProvisional), og det er set inden for
+-- sin levetid (observationTTL, ellers 180 s; et umålt sweep-fund kun 30 s).
+--
+-- Lars: åren skal forsvinde «så hurtigt som muligt efter den er mined». FDG
+-- fjerner selv et fund, når det høstes, og når et nyt tjek ikke finder det.
+-- D2Map gør det hurtigere: (1) et fund, FDG lige har savnet ved et tjek
+-- (missingAt), vises ikke; (2) lykkes et Mining-cast, skjules åren nærmest
+-- figuren med det samme (til FDG ser den igen, dvs. når den er groet frem
+-- igen), og listen hentes forfra; (3) højst NODE_MAX_AGE sekunder siden
+-- sidste bekræftelse, ikke FDG's 3 minutter.
 --------------------------------------------------------------------------------
 
-local CollectNodes, NodeStatus, RefreshOre
+local CollectNodes, NodeStatus, RefreshOre, OnSpellcast
 do                                 -- en blok, af samme grund som afsnit 8
 
 local NODE_TEXTURE = MEDIA .. "node.tga"   -- hvid rude med sort kant; farves pr. slags
-local NODE_MARGIN = 60             -- yards uden for rammen, der også hentes (man løber lidt mellem to hentninger)
-local NODE_CELL = 3                -- yards: årer tættere på hinanden end det er samme plads
-local NODE_RETRY = 5               -- sekunder mellem aflæsninger af skill, og mellem forsøg når databasen ikke er klar
-local MINING_LINE = 186            -- Minings «skill line» i spillet
-local MINING_SPELLS = { 2575, 2576, 3564, 10248, 2580 }   -- Mining (fire trin) og Find Minerals
+local NODE_TTL = 180               -- FDG's standardlevetid for et fund (sekunder)
+local NODE_SWEEP_TTL = 30          -- … og for et sweep-fund, der ikke er målt op
+local NODE_MAX_AGE = 60            -- D2Map viser højst så gamle fund (Lars: ikke 3 minutter)
+local MINED_YARDS = 10             -- et Mining-cast fjerner åren inden for så mange yards af figuren
+local MINED_KEEP = 300             -- sekunder et mined-mærke huskes (en åre gror ikke frem hurtigere)
+local MINING_SPELL_IDS = { [2575] = true, [2576] = true, [3564] = true, [10248] = true }
 
--- Slagsen, det Mining-skill den kræver, farven på automappet og objekternes
--- id'er i spillet (tjekket mod navnene i QuestieDB 1.1.3). Rækkefølgen er
--- prioriteten på en delt plads: de almindelige årer med det højeste krav
--- først, de sjældne (sølv, guld, truesilver) efter dem, og til sidst de to,
--- der kun findes ét sted.
-local ORES = {
-    { name = "Rich Thorium", skill = 275, color = { 0.75, 1.00, 0.30 }, ids = { 175404, 177388 } },
-    { name = "Small Thorium", skill = 245, color = { 0.40, 0.90, 0.35 }, ids = { 324, 150082, 176643, 123848 } },
-    { name = "Dark Iron", skill = 230, color = { 1.00, 0.30, 0.25 }, ids = { 165658 } },
-    { name = "Mithril", skill = 175, color = { 0.50, 0.95, 1.00 }, ids = { 2040, 150079, 176645, 123310 } },
-    { name = "Iron", skill = 125, color = { 0.45, 0.65, 1.00 }, ids = { 1735 } },
-    { name = "Tin", skill = 65, color = { 0.80, 0.80, 0.80 }, ids = { 1732, 2054, 3764, 103711, 181249 } },
-    { name = "Copper", skill = 1, color = { 1.00, 0.58, 0.25 }, ids = { 1731, 2055, 3763, 103713, 181248 } },
-    { name = "Truesilver", skill = 230, color = { 0.40, 1.00, 0.80 }, ids = { 2047, 150081, 181108, 123309 } },
-    { name = "Gold", skill = 155, color = { 1.00, 0.85, 0.20 }, ids = { 1734, 150080, 181109, 73941 } },
-    { name = "Silver", skill = 75, color = { 1.00, 1.00, 1.00 }, ids = { 1733, 105569, 73940 } },
-    { name = "Lesser Bloodstone", skill = 75, color = { 0.85, 0.55, 1.00 }, ids = { 2653 } },
-    { name = "Incendicite", skill = 65, color = { 0.85, 0.55, 1.00 }, ids = { 1610, 1667 } },
+-- Malmens item-id → farve på automappet (samme farver som i 1.8).
+local ORE_COLORS = {
+    [2770] = { 1.00, 0.58, 0.25 },   -- Copper
+    [2771] = { 0.80, 0.80, 0.80 },   -- Tin
+    [2775] = { 1.00, 1.00, 1.00 },   -- Silver
+    [2772] = { 0.45, 0.65, 1.00 },   -- Iron
+    [2776] = { 1.00, 0.85, 0.20 },   -- Gold
+    [3858] = { 0.50, 0.95, 1.00 },   -- Mithril
+    [7911] = { 0.40, 1.00, 0.80 },   -- Truesilver
+    [10620] = { 0.40, 0.90, 0.35 },  -- Thorium (small, rich, ooze covered)
+    [11370] = { 1.00, 0.30, 0.25 },  -- Dark Iron
+    [248815] = { 0.75, 1.00, 0.30 }, -- Heavy Thorium
 }
+local OTHER_COLOR = { 0.85, 0.55, 1.00 }         -- Incendicite, Bloodstone, Amber …
 
-local zones = {}                   -- zone (areaID) → { continent, north, dNorth, west, dWest } eller false
-local seen = {}                    -- pladser, der allerede har fået et mærke i denne hentning
-local retryAt = 0                  -- tidligst her prøves databasen igen
-local databaseMissing = false
-local skillAt                      -- hvornår skill sidst blev læst (nil = læs nu)
-local limit = 0                    -- højeste krav, der vises (0 = ingen årer)
-local skillNote = "not checked yet"
-local nodesKnown, nodesNear = 0, 0
-local buildNotes = {}              -- slags → hvad hentningen gav (til diagnosen)
-local reported = false             -- er linjen i chatten skrevet i denne session?
+local placed = setmetatable({}, { __mode = "k" })   -- fund → { map, x, y, continent, north, west }
+local mined = {}                   -- { time, continent, north, west } for de seneste Mining-casts
+local status = "not checked yet"
+local liveTotal, liveNear = 0, 0
 
--- Skill og bonus fra de tabeller, de nyere API'er giver.
-local function InfoRank(info)
-    if IsSecret(info) or type(info) ~= "table" then return end
-    local rank = info.rank or info.skillRank or info.skillLevel
-    if not IsNumber(rank) then return end
-    local bonus = info.modifier or info.skillModifier
-    return rank + (IsNumber(bonus) and bonus or 0)
+-- Er fundet live lige nu? Samme regler, som FDG bruger til sin egen HUD.
+local function IsLive(node, now)
+    if not (node.centered or node.fastLocation or node.manualProvisional) then return false end
+    if node.missingAt then return false end                              -- FDG savnede den ved sidste tjek
+    if node.anonymous and not node.manualRefined then return false end   -- slagsen er ikke afgjort endnu
+    local seen = node.seen
+    if not IsNumber(seen) then return false end
+    local ttl = IsNumber(node.observationTTL) and node.observationTTL or NODE_TTL
+    if IsNumber(node.manualExpiresAt) then ttl = min(ttl, node.manualExpiresAt - seen) end
+    if node.cursorSweepObservation and not node.manualRefined and not node.centered and not node.fastLocation then
+        ttl = min(ttl, NODE_SWEEP_TTL)
+    end
+    local age = now - seen
+    return age >= 0 and age <= min(ttl, NODE_MAX_AGE)
 end
 
--- Hvad Mining hedder på klientens sprog (til skill-listen).
-local function MiningName()
-    local name
-    if C_Spell and C_Spell.GetSpellInfo then
-        local ok, info = pcall(C_Spell.GetSpellInfo, MINING_SPELLS[1])
-        if ok and not IsSecret(info) and type(info) == "table" then name = info.name end
-    end
-    if name == nil and GetSpellInfo then
-        local ok, text = pcall(GetSpellInfo, MINING_SPELLS[1])
-        if ok then name = text end
-    end
-    if not IsSecret(name) and type(name) == "string" then return name end
-    return "Mining"
-end
-
--- Hvad hvert forsøg på at læse skill gav (til diagnosen i D2MapDB.oreDiag).
-local tries = {}
-
-local function Try(source, result)
-    tries[#tries + 1] = source .. ": " .. tostring(result)
-end
-
--- Figurens Mining-skill, eller nil når det ikke kan læses. Klienterne er ikke
--- enige om, hvor det står, så de kendte steder prøves efter tur. Andet svar:
--- true, når mindst ét sted svarede helt og Mining ikke var der (= figuren har
--- ikke Mining), ellers nil (= ved det ikke).
-local function ReadMiningSkill()
-    wipe(tries)
-    local complete = false
-    -- 1. Figurens professions, som TradeSkillMaster læser dem på Forever: ALLE
-    -- pladser, GetProfessions giver (ikke kun de to første).
-    if GetProfessions and GetProfessionInfo then
-        local slots = { pcall(GetProfessions) }
-        if slots[1] then
-            local name = MiningName()
-            complete = true
-            for i = 2, max(#slots, 7) do
-                local index = slots[i]
-                if IsNumber(index) then
-                    local okInfo, title, _, rank, _, _, _, line, bonus = pcall(GetProfessionInfo, index)
-                    if okInfo and IsNumber(rank) then
-                        Try("GetProfessionInfo(" .. index .. ")", tostring(title) .. " " .. rank .. " line " .. tostring(line))
-                        if (IsNumber(line) and line == MINING_LINE) or (not IsSecret(title) and title == name) then
-                            if rank > 0 then return rank + (IsNumber(bonus) and bonus or 0) end
-                        end
-                    else
-                        complete = false
-                        Try("GetProfessionInfo(" .. index .. ")", okInfo and "no number" or title)
-                    end
-                elseif index ~= nil then
-                    complete = false
-                end
-            end
-        else
-            Try("GetProfessions", slots[2])
-        end
-    end
-    -- 2. Direkte på skill line.
-    for source, api in pairs({ ["C_SkillInfo.GetSkillLineInfoByID"] = C_SkillInfo and C_SkillInfo.GetSkillLineInfoByID or false,
-        ["C_TradeSkillUI.GetProfessionInfoBySkillLineID"] = C_TradeSkillUI and C_TradeSkillUI.GetProfessionInfoBySkillLineID or false }) do
-        if api then
-            local ok, info = pcall(api, MINING_LINE)
-            local rank = ok and InfoRank(info)
-            Try(source, ok and (rank or type(info)) or info)
-            if rank and rank > 0 then return rank end
-        end
-    end
-    -- 3. Skill-listen (Classic-klienter; TSM's reserve). Nogle klienter giver en
-    -- tabel i stedet for flere værdier.
-    local count = C_SkillInfo and C_SkillInfo.GetNumSkillLines or GetNumSkillLines
-    local reader = C_SkillInfo and C_SkillInfo.GetSkillLineInfo or GetSkillLineInfo
-    if count and reader then
-        local ok, lines = pcall(count)
-        if ok and IsNumber(lines) then
-            local name = MiningName()
-            Try("skill lines", lines)
-            for index = 1, min(lines, 200) do
-                local okInfo, title, _, _, rank, _, bonus = pcall(reader, index)
-                if okInfo and type(title) == "table" and not IsSecret(title) then
-                    local info = title
-                    title = info.skillName or info.name
-                    rank = InfoRank(info)
-                    bonus = 0
-                end
-                if okInfo and not IsSecret(title) and title == name and IsNumber(rank) and rank > 0 then
-                    return rank + (IsNumber(bonus) and bonus or 0)
-                end
-            end
-        end
-    end
-    return nil, complete
-end
-
--- Kan figuren Mining overhovedet? Bruges, når selve tallet ikke kan læses.
-local function KnowsMining()
-    for _, known in ipairs({ IsPlayerSpell or false, C_SpellBook and C_SpellBook.IsSpellKnown or false, IsSpellKnown or false }) do
-        if known then
-            for _, spell in ipairs(MINING_SPELLS) do
-                local ok, has = pcall(known, spell)
-                if ok and not IsSecret(has) and has == true then return true end
-            end
+-- Er åren lige blevet mined (og ikke set igen siden)?
+local function WasMined(node, continent, north, west)
+    for i = 1, #mined do
+        local m = mined[i]
+        if m.continent == continent and node.seen <= m.time then
+            local dn, dw = north - m.north, west - m.west
+            if dn * dn + dw * dw <= MINED_YARDS * MINED_YARDS then return true end
         end
     end
     return false
 end
 
--- Sætter «limit»: det højeste krav, en åre må have for at blive vist. Kun når
--- det er helt sikkert, at figuren ikke har Mining, vises ingen årer; kan skill
--- ikke læses, vises dem alle hellere end ingen.
-local function UpdateLimit()
-    if db.ore == "all" then
-        limit, skillNote, skillAt = math.huge, "every vein", nil
-        return
+-- Kaldes ved UNIT_SPELLCAST_SUCCEEDED for spilleren. Er det Mining, huskes
+-- stedet, og pins hentes forfra med det samme og igen lidt efter (når FDG har
+-- nået at fjerne fundet).
+local function IsMiningSpell(spellID)
+    if not IsNumber(spellID) then return false end
+    if MINING_SPELL_IDS[spellID] then return true end
+    local name
+    if C_Spell and C_Spell.GetSpellName then
+        local ok, text = pcall(C_Spell.GetSpellName, spellID)
+        if ok then name = text end
     end
-    local now = GetTime and GetTime()
-    if skillAt and now and now >= skillAt and now - skillAt < NODE_RETRY then return end
-    skillAt = now
-    local rank, noMining = ReadMiningSkill()
-    if rank then
-        limit, skillNote = rank, ("Mining %d"):format(rank)
-    elseif KnowsMining() or not noMining then
-        limit, skillNote = math.huge, "Mining skill could not be read, showing every vein"
-    else
-        limit, skillNote = 0, "this character has no Mining; /d2map ore all shows every vein anyway"
+    return not IsSecret(name) and name == "Mining"
+end
+
+function OnSpellcast(spellID)
+    if not db or db.ore == "off" or not IsMiningSpell(spellID) then return end
+    local continent, north, west = PlayerPosition()
+    if not continent then return end
+    local now = GetTime and GetTime() or 0
+    for i = #mined, 1, -1 do
+        if now - mined[i].time > MINED_KEEP then table.remove(mined, i) end
+    end
+    mined[#mined + 1] = { time = now, continent = continent, north = north, west = west }
+    forceSync, forceTick = true, true
+    if C_Timer and C_Timer.After then
+        C_Timer.After(0.5, function() forceSync, forceTick = true, true end)
     end
 end
 
--- Et zonekort er en ret firkant i verden, så to hjørner er nok til at regne
--- alle zonens punkter om – i stedet for et opslag i spillet pr. åre.
-local function ZoneTransform(zoneDB, areaID)
-    local zone = zones[areaID]
-    if zone ~= nil then return zone end
-    zone = false
-    local mapID = zoneDB:GetUiMapIdByAreaId(areaID)        -- fejler, til Questie er færdig med at starte
-    if IsNumber(mapID) and mapID > 0 then
-        local continent, north, west = ZoneToWorld(mapID, 0, 0)
-        local continent2, north2, west2 = ZoneToWorld(mapID, 1, 1)
-        if continent and continent == continent2 and north2 ~= north and west2 ~= west then
-            zone = { continent = continent, north = north, dNorth = north2 - north, west = west, dWest = west2 - west }
-        end
+-- Fundets plads i verden. Huskes pr. fund, så længe kort og x/y er de samme.
+local function NodeWorld(node)
+    local map, x, y = node.map, node.x, node.y
+    if not (IsNumber(map) and IsNumber(x) and IsNumber(y)) then return end
+    local cached = placed[node]
+    if cached and cached.map == map and cached.x == x and cached.y == y then
+        return cached.continent, cached.north, cached.west
     end
-    zones[areaID] = zone
-    return zone
+    local continent, north, west = ZoneToWorld(map, x, y)
+    cached = cached or {}
+    cached.map, cached.x, cached.y = map, x, y
+    cached.continent, cached.north, cached.west = continent, north, west
+    placed[node] = cached
+    return continent, north, west
 end
 
--- Henter alle pladser for én slags åre og regner dem om til verdenskoordinater,
--- delt op pr. kontinent. Returnerer false, når databasen ikke er der (endnu).
-local function BuildOre(ore)
-    local get = LibQuestieDB and LibQuestieDB.Object and LibQuestieDB.Object.Get
-    local zoneDB = QuestieModule("ZoneDB")
-    if type(get) ~= "function" or not zoneDB or type(zoneDB.GetUiMapIdByAreaId) ~= "function" then
-        return false
-    end
-    local found = {}
-    for _, id in ipairs(ore.ids) do
-        local ok, spawns = pcall(get, id, "spawns")
-        if ok and not IsSecret(spawns) and type(spawns) == "table" then
-            for areaID, list in pairs(spawns) do
-                local zone = IsNumber(areaID) and type(list) == "table" and ZoneTransform(zoneDB, areaID)
-                if zone then
-                    local store = found[zone.continent]
-                    if not store then
-                        store = { north = {}, west = {}, count = 0 }
-                        found[zone.continent] = store
-                    end
-                    local n = store.count
-                    for i = 1, #list do
-                        local point = list[i]
-                        local x, y = type(point) == "table" and point[1], type(point) == "table" and point[2]
-                        -- (-1, -1) er en åre inde i en instance: den har ingen plads på kortet.
-                        if IsNumber(x) and IsNumber(y) and x >= 0 and x <= 100 and y >= 0 and y <= 100 then
-                            n = n + 1
-                            store.north[n] = zone.north + y / 100 * zone.dNorth
-                            store.west[n] = zone.west + x / 100 * zone.dWest
-                        end
-                    end
-                    store.count = n
-                end
-            end
-        end
-    end
-    ore.found = found
-    return true
-end
-
--- Diagnose: skrives i D2MapDB og dermed i SavedVariables ved /reload og log
--- ud, så det kan læses uden for spillet, hvis årerne ikke dukker op.
-local function WriteDiagnosis(continent)
-    db.oreDiag = {
-        when = date and date("%Y-%m-%d %H:%M:%S") or nil,
-        mode = db.ore, note = skillNote, limit = limit < math.huge and limit or "all",
-        skillTries = { table.concat(tries, " | ") }, builds = buildNotes, continent = continent,
-        known = nodesKnown, near = nodesNear, databaseMissing = databaseMissing,
-        questieDB = LibQuestieDB ~= nil, zoneDB = QuestieModule("ZoneDB") ~= nil,
-    }
-end
-
--- Lægger årerne omkring spilleren efter de n pins, der allerede står i out, og
--- returnerer det nye antal. Kaldes, hver gang pins hentes (ca. én gang i sekundet).
+-- Lægger de live årer omkring spilleren efter de n pins, der allerede står i
+-- out, og returnerer det nye antal. Kaldes, hver gang pins hentes (ca. hvert sekund).
 function CollectNodes(out, n, continent, north, west)
-    nodesKnown, nodesNear = 0, 0
-    if db.ore == "off" then return n end
-    UpdateLimit()
-    if limit <= 0 then
-        WriteDiagnosis(continent)
+    liveTotal, liveNear = 0, 0
+    if db.ore == "off" then
+        status = "off"
+        return n
+    end
+    local source = FDGWorldMarkersNodeSource
+    if type(source) ~= "function" then
+        status = "needs Forever Dual Gathering (it reads the live veins off the minimap)"
+        return n
+    end
+    local ok, nodes = pcall(source)
+    if not ok or type(nodes) ~= "table" then
+        status = "Forever Dual Gathering gave no data" .. (ok and "" or (": " .. tostring(nodes)))
         return n
     end
     local now = GetTime and GetTime() or 0
-    local mayBuild = now >= retryAt or now < retryAt - NODE_RETRY
-    local radius = db.span / 2 + NODE_MARGIN
-    wipe(seen)
-    for _, ore in ipairs(ORES) do
-        if ore.skill <= limit then
-            if not ore.found and mayBuild then
-                -- Højst én slags pr. hentning, så ingen opdatering bliver tung;
-                -- den næste kommer med det samme i næste opdatering.
-                mayBuild = false
-                local ok, built = pcall(BuildOre, ore)
-                if ok and built then
-                    databaseMissing = false
-                    forceSync = true
-                    local parts = {}
-                    for c, store in pairs(ore.found) do parts[#parts + 1] = ("continent %s: %d"):format(tostring(c), store.count) end
-                    buildNotes[ore.name] = #parts > 0 and table.concat(parts, ", ") or "no spots"
-                else
-                    databaseMissing = true
-                    retryAt = now + NODE_RETRY
-                    buildNotes[ore.name] = ok and "Questie's database not ready" or ("error: " .. tostring(built))
-                end
-            end
-            local store = ore.found and ore.found[continent]
-            if store then
-                nodesKnown = nodesKnown + store.count
-                local norths, wests, color = store.north, store.west, ore.color
-                for i = 1, store.count do
-                    local dn, dw = norths[i] - north, wests[i] - west
-                    if dn < radius and dn > -radius and dw < radius and dw > -radius then
-                        local cell = floor(norths[i] / NODE_CELL) * 65536 + floor(wests[i] / NODE_CELL)
-                        if not seen[cell] then
-                            seen[cell] = true
-                            n = n + 1
-                            nodesNear = nodesNear + 1
-                            EmitPin(out, n, continent, norths[i], wests[i], NODE_TEXTURE,
-                                color[1], color[2], color[3], "node")
-                        end
-                    end
-                end
+    local radius = db.span                   -- rigeligt: kun det i rammen tegnes
+    for i = 1, #nodes do
+        local node = nodes[i]
+        if type(node) == "table" and node.kind == "ore" and IsLive(node, now) then
+            liveTotal = liveTotal + 1
+            local nodeContinent, nodeNorth, nodeWest = NodeWorld(node)
+            if nodeContinent == continent and abs(nodeNorth - north) < radius and abs(nodeWest - west) < radius
+                and not WasMined(node, nodeContinent, nodeNorth, nodeWest) then
+                liveNear = liveNear + 1
+                local color = ORE_COLORS[node.id] or OTHER_COLOR
+                n = n + 1
+                EmitPin(out, n, nodeContinent, nodeNorth, nodeWest, NODE_TEXTURE, color[1], color[2], color[3], "node")
             end
         end
     end
-    WriteDiagnosis(continent)
-    -- Én linje i chatten pr. session, når årerne er hentet, så man kan se, at de er der.
-    if not reported and not databaseMissing and nodesKnown > 0 then
-        reported = true
-        Print(("mining veins shown (%s): %d spots on this continent, %d near you. /d2map ore changes it."):format(skillNote, nodesKnown, nodesNear))
-    end
+    status = ("%d live from Forever Dual Gathering, %d near you"):format(liveTotal, liveNear)
     return n
 end
 
--- Læs skill forfra og prøv databasen igen ved næste hentning (indstillingen er lige ændret).
-function RefreshOre()
-    skillAt, retryAt = nil, 0
-end
+-- Ingenting at nulstille længere (FDG holder selv styr på sine fund).
+function RefreshOre() end
 
 -- Til /d2map status.
 function NodeStatus()
-    if db.ore == "off" then return "off" end
-    local text = ("%s (%s), %d spots known on this continent, %d near you"):format(
-        db.ore == "all" and "all" or "my skill", skillNote, nodesKnown, nodesNear)
-    if databaseMissing then text = text .. "; no vein data yet (it comes from Questie's database)" end
-    return text
+    return status
 end
 
 end -- afsnit 6b
@@ -2464,7 +2305,7 @@ local function CreateOptions()
         return ("Pin size: %.1fx"):format(v)
     end)
     byKey.ore = MakeChoice(frame, Row(28), "Ore", "ore", {
-        { "mine", "My skill" }, { "all", "All veins" }, { "off", "Off" },
+        { "on", "Live veins" }, { "off", "Off" },
     })
     byKey.edgePins = MakeCheck(frame, Row(26), "Show out-of-range targets on the rim", "edgePins")
     byKey.route = MakeCheck(frame, Row(26), "Draw a pull route through each cluster of objectives", "route")
@@ -2626,7 +2467,7 @@ local function PrintHelp()
         "/d2map style <color|sepia|ghost> – terrain look (now " .. db.style .. ")",
         "/d2map pins <all|objectives|off> – which quest pins (now " .. db.pins .. ")",
         "/d2map pinsize <0.5-3> – pin scale (now " .. db.pinScale .. ")",
-        "/d2map ore <mine|all|off> – mining veins: those your Mining skill allows, every vein, or none (now " .. db.ore .. ")",
+        "/d2map ore <on|off> – mining veins that are up right now, read by Forever Dual Gathering (now " .. db.ore .. ")",
         "/d2map rim <on|off> – out-of-range quest targets and the guide's goal as markers on the rim (now " .. OnOff(db.edgePins) .. ")",
         "/d2map route <on|off> – a pull route through each cluster of objectives (now " .. OnOff(db.route) .. ")",
         "/d2map pull <0-60> – how far the route may stay from the outermost targets, in yards (now " .. db.pullRange .. ")",
@@ -2885,6 +2726,11 @@ end
 -- Combat slut: tilbage til normal gennemsigtighed.
 function handlers.PLAYER_REGEN_ENABLED()
     inCombat = false
+end
+
+-- Et lykkedes cast: er det Mining, forsvinder åren med det samme (afsnit 6b).
+function handlers.UNIT_SPELLCAST_SUCCEEDED(unit, _, spellID)
+    if unit == "player" then OnSpellcast(spellID) end
 end
 
 -- Ny zone: Questie tegner sine ikoner om, så hent dem straks.

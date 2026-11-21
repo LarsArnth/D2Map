@@ -1,0 +1,3 @@
+- **Mining veins are now live.** The map shows only the veins that are up right now, read off the minimap by **Forever Dual Gathering** (it has to be enabled; its own HUD can stay hidden). The spawn places from Questie's database are gone: they showed where a vein *could* be, and Questie has none in Forever's new zones.
+- A vein disappears the moment you mine it, and as soon as Dual Gathering finds it gone.
+- `/d2map ore <on|off>` (or "Ore" in the options window) turns the veins on and off.
