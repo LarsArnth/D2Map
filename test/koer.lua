@@ -1126,6 +1126,32 @@ kor(1.2)
 tjek("quest-pins er tilbage, og årerne med dem", D2MapDB.ore == "on" and #aarer() >= 1 and #pins() > #aarer(), #pins())
 FDGWorldMarkersNodeSource = nil
 
+print("Forsøget /d2map probe")
+slash("probe")
+tjek("uden minimap-API'et siger probe det og stopper", D2MapDB.probe and D2MapDB.probe.api == false)
+local muspunkt
+Minimap = {
+    GetLeft = function() return 1000 end, GetBottom = function() return 600 end,
+    GetWidth = function() return 140 end, GetHeight = function() return 140 end,
+    GetEffectiveScale = function() return 1 end,
+    UpdateMouseoverAtPoint = function(_, x, y) muspunkt = { x - 1070, y - 670 } end,
+}
+C_TooltipInfo = { GetMinimapMouseover = function()
+    -- En kobberåre 20 px øst og 10 px nord for midten, 5 px i radius.
+    if muspunkt and (muspunkt[1] - 20) ^ 2 + (muspunkt[2] - 10) ^ 2 <= 25 then
+        return { lines = { { leftText = "|cffffffffCopper Vein|r" } } }
+    end
+    return { lines = {} }
+end }
+slash("probe")
+local probe = D2MapDB.probe
+tjek("probe gennemsøger minimappet og finder åren", probe.api and probe.modes.plain.points > 900
+    and probe.modes.plain.texts["|cffffffffCopper Vein|r"] and probe.modes.plain.texts["|cffffffffCopper Vein|r"].count >= 3,
+    probe.modes.plain.points)
+tjek("…og skriver det i chatten", chat[#chat]:find("Copper Vein x", 1, true) ~= nil, chat[#chat])
+tjek("uden SetUsingSoftCursor prøves kun den almindelige måde", probe.modes.soft == nil)
+Minimap, C_TooltipInfo = nil, nil
+
 print("Tastaturgenvej, når Alt+M peger på en addon, der er slået fra")
 bindinger["ALT-M"] = "DandyMap_AUTOMAP"                -- DandyMap er ikke indlæst: handlingen findes ikke
 D2MapDB.bindingOffered = false

@@ -2654,6 +2654,86 @@ end
 
 commands.status = PrintStatus
 
+-- /d2map probe: et forsøg (2026-11-21). Kan en addon slå et punkt på minimappet
+-- op uden musen? Minimap:UpdateMouseoverAtPoint + C_TooltipInfo.GetMinimapMouseover
+-- prøves i et gitter over hele minimappet, først som det er, så med
+-- SetUsingSoftCursor(true). Resultatet står i chatten og i D2MapDB.probe (læses
+-- i SavedVariables efter /reload). Forever Dual Gathering 2.0 bruger kun
+-- musens rigtige hover, så det er uvist, om det virker.
+commands.probe = function()
+    local result = { when = date and date("%Y-%m-%d %H:%M:%S") or nil, modes = {} }
+    db.probe = result
+    local api = Minimap and type(Minimap.UpdateMouseoverAtPoint) == "function"
+        and C_TooltipInfo and type(C_TooltipInfo.GetMinimapMouseover) == "function"
+    result.api = api and true or false
+    result.softCursorApi = Minimap and type(Minimap.SetUsingSoftCursor) == "function" or false
+    if not api then
+        Print("probe: this client has no Minimap:UpdateMouseoverAtPoint / C_TooltipInfo.GetMinimapMouseover.")
+        return
+    end
+    local left, bottom = Minimap:GetLeft(), Minimap:GetBottom()
+    local width, height, scale = Minimap:GetWidth(), Minimap:GetHeight(), Minimap:GetEffectiveScale()
+    if not (IsNumber(left) and IsNumber(bottom) and IsNumber(width) and IsNumber(height) and IsNumber(scale)) then
+        Print("probe: the minimap's size or place is unknown.")
+        return
+    end
+    result.minimap = ("%.0fx%.0f at %.0f,%.0f, scale %.2f"):format(width, height, left, bottom, scale)
+    for _, mode in ipairs({ "plain", "soft" }) do
+        if mode == "plain" or result.softCursorApi then
+            local stats = { points = 0, errors = 0, secret = 0, empty = 0, texts = {} }
+            result.modes[mode] = stats
+            if mode == "soft" then
+                local ok, err = pcall(Minimap.SetUsingSoftCursor, Minimap, true)
+                if not ok then stats.softError = tostring(err) end
+            end
+            local step, cx, cy, r = 4, width / 2, height / 2, min(width, height) / 2
+            for gx = step / 2, width, step do
+                for gy = step / 2, height, step do
+                    if (gx - cx) ^ 2 + (gy - cy) ^ 2 <= r * r then
+                        stats.points = stats.points + 1
+                        local ok, err = pcall(Minimap.UpdateMouseoverAtPoint, Minimap, (left + gx) * scale, (bottom + gy) * scale)
+                        if not ok then
+                            stats.errors = stats.errors + 1
+                            stats.firstError = stats.firstError or tostring(err)
+                        else
+                            local okTip, tip = pcall(C_TooltipInfo.GetMinimapMouseover)
+                            if not okTip then
+                                stats.errors = stats.errors + 1
+                                stats.firstError = stats.firstError or tostring(tip)
+                            elseif IsSecret(tip) or (type(tip) == "table" and IsSecret(tip.lines)) then
+                                stats.secret = stats.secret + 1
+                            elseif type(tip) ~= "table" or type(tip.lines) ~= "table" or #tip.lines == 0 then
+                                stats.empty = stats.empty + 1
+                            else
+                                for _, line in ipairs(tip.lines) do
+                                    local text = type(line) == "table" and line.leftText
+                                    if IsSecret(text) then
+                                        stats.secret = stats.secret + 1
+                                    elseif type(text) == "string" and text ~= "" then
+                                        local entry = stats.texts[text]
+                                        if not entry then
+                                            entry = { count = 0, x = floor(gx - cx + 0.5), y = floor(gy - cy + 0.5) }
+                                            stats.texts[text] = entry
+                                        end
+                                        entry.count = entry.count + 1
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+            if mode == "soft" then pcall(Minimap.SetUsingSoftCursor, Minimap, false) end
+            local names = {}
+            for text, entry in pairs(stats.texts) do names[#names + 1] = ("%s x%d"):format(text:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""), entry.count) end
+            table.sort(names)
+            Print(("probe %s: %d points, %d errors, %d secret, %d empty; found: %s"):format(mode, stats.points,
+                stats.errors, stats.secret, stats.empty, #names > 0 and table.concat(names, ", ") or "nothing"))
+            if stats.firstError then Print("probe " .. mode .. " error: " .. stats.firstError) end
+        end
+    end
+end
+
 commands.reset = function()
     ResetAll()
     Print("all settings reset.")
