@@ -12,6 +12,7 @@
 --   4. Rammer, styling og click-through
 --   5. Terræn (minimap-fliser)
 --   6. Adaptere til quest-pins (Questie, Blizzards egne quest-punkter)
+--   6b. Malmårer (mining nodes) fra Questies database
 --   7. Pins på automappet
 --   8. Former om klyngerne af quest-mål
 --   9. Guidens vej (waypoint-stregen fra fx Factoruide)
@@ -53,6 +54,7 @@ local DEFAULTS = {
     pins           = "all",    -- all | objectives | off
     pinScale       = 1.0,      -- størrelsesfaktor for pins
     pinBoost       = 2.0,      -- pins er så mange gange mere synlige end terrænet
+    ore            = "mine",   -- malmårer: mine (dem, ens Mining-skill rækker til) | all | off
     edgePins       = false,    -- vis det, der ligger uden for rammen, som mærker på kanten:
                                -- nærmeste pin for hver quest, og guidens mål
     route          = true,     -- tegn en pull-rute gennem hver klynge af quest-mål
@@ -89,6 +91,7 @@ local WHOLE = { opacity = true, combatOpacity = true, moveOpacity = true, size =
 local SHAPES = { round = true, square = true, plain = true }
 local PIN_MODES = { all = true, objectives = true, off = true }
 local SOURCES = { auto = true, questie = true, blizzard = true }
+local ORE_MODES = { mine = true, all = true, off = true }
 
 -- Hvordan fliserne farves. "ghost" lægger dem additivt oven på spillet, så
 -- mørke områder forsvinder – det, der ligner Diablo II's automap mest.
@@ -116,6 +119,7 @@ local PIN_KINDS = {
     objective = { size = 16, level = 1, edge = true },
     available = { size = 20, level = 2, edge = false },
     complete  = { size = 22, level = 3, edge = true },
+    node      = { size = 13, level = 0, edge = false },      -- malmårer (afsnit 6b)
 }
 
 --------------------------------------------------------------------------------
@@ -182,6 +186,7 @@ local function ValidateSettings()
     if not STYLES[db.style] then db.style = DEFAULTS.style end
     if not PIN_MODES[db.pins] then db.pins = DEFAULTS.pins end
     if not SOURCES[db.source] then db.source = DEFAULTS.source end
+    if not ORE_MODES[db.ore] then db.ore = DEFAULTS.ore end
     db.updateInterval = Clamp(db.updateInterval, 0.02, 1)
     db.pinSyncInterval = Clamp(db.pinSyncInterval, 0.2, 10)
     db.fadeTime = Clamp(db.fadeTime, 0, 5)
@@ -549,7 +554,10 @@ end
 ns.EmitPin = EmitPin
 
 ---- Questie -------------------------------------------------------------------
--- Questie lægger alle sine kort-ikoner i HereBeDragons' register:
+-- Questie lægger alle sine kort-ikoner i sit eget eksemplar af HereBeDragons'
+-- pin-register. Fra Questie 12.8 er det et internt modul:
+--     QuestieLoader._modules.HBDPins.worldmapPinRegistry[Questie]
+-- og før det et LibStub-bibliotek:
 --     LibStub("HereBeDragonsQuestie-Pins-2.0").worldmapPinRegistry[Questie]
 -- Nøglerne er ikon-rammerne. Hver har x og y (zone-koordinater i procent),
 -- UiMapID, data (Type, Id, Icon …), texture og hidden (Questies egne filtre).
@@ -564,8 +572,24 @@ local QUESTIE_KINDS = {
 -- Questie genbruger sine rammer, derfor sammenlignes x, y og kort hver gang.
 local questieWorld = setmetatable({}, { __mode = "k" })
 
+-- Et af Questies interne moduler, eller nil. Der slås op med rawget i modul-
+-- listen: QuestieLoader:ImportModule opretter det modul, den ikke finder, og
+-- så ville en ældre Questie få et tomt modul, der ligner et rigtigt.
+local function QuestieModule(name)
+    local loader = QuestieLoader
+    local modules = type(loader) == "table" and rawget(loader, "_modules")
+    local module = type(modules) == "table" and rawget(modules, name)
+    if type(module) == "table" then return module end
+end
+
 local function QuestieRegistry()
-    if not Questie or not LibStub then return end
+    if not Questie then return end
+    local module = QuestieModule("HBDPins")
+    if module and type(module.worldmapPinRegistry) == "table"
+        and type(module.worldmapPinRegistry[Questie]) == "table" then
+        return module.worldmapPinRegistry[Questie]
+    end
+    if not LibStub then return end
     for _, name in ipairs({ "HereBeDragonsQuestie-Pins-2.0", "HereBeDragons-Pins-2.0" }) do
         local ok, lib = pcall(LibStub, name, true)
         if ok and type(lib) == "table" and type(lib.worldmapPinRegistry) == "table"
@@ -697,6 +721,283 @@ local function ActiveAdapter()
 end
 
 --------------------------------------------------------------------------------
+-- 6b. Malmårer (mining nodes)
+--
+-- Stederne, hvor en åre KAN stå, hentes fra Questies database (QuestieDB): hver
+-- slags åre er et objekt med «spawns» = { [zone] = { { x, y }, … } } i procent
+-- af zonekortet. Spillet fortæller ikke addons, hvilke årer der står fremme
+-- lige nu (minimappets gule prikker kan ikke læses), så automappet viser alle
+-- pladserne – som GatherMate – og man løber selv forbi og ser efter.
+--
+-- Som standard vises kun de årer, figurens Mining-skill rækker til; en figur
+-- uden Mining ser ingenting. Mange pladser deles af flere slags (sølv står,
+-- hvor der ellers er tin eller jern): så tegnes ét mærke i den almindeligste
+-- slags' farve. Malmen ligger oven i quest-pins og er uafhængig af, hvilken
+-- adapter de kommer fra – men kræver Questie, for det er dens database.
+--------------------------------------------------------------------------------
+
+local CollectNodes, NodeStatus, RefreshOre
+do                                 -- en blok, af samme grund som afsnit 8
+
+local NODE_TEXTURE = MEDIA .. "node.tga"   -- hvid rude med sort kant; farves pr. slags
+local NODE_MARGIN = 60             -- yards uden for rammen, der også hentes (man løber lidt mellem to hentninger)
+local NODE_CELL = 3                -- yards: årer tættere på hinanden end det er samme plads
+local NODE_RETRY = 5               -- sekunder mellem aflæsninger af skill, og mellem forsøg når databasen ikke er klar
+local MINING_LINE = 186            -- Minings «skill line» i spillet
+local MINING_SPELLS = { 2575, 2576, 3564, 10248, 2580 }   -- Mining (fire trin) og Find Minerals
+
+-- Slagsen, det Mining-skill den kræver, farven på automappet og objekternes
+-- id'er i spillet (tjekket mod navnene i QuestieDB 1.1.3). Rækkefølgen er
+-- prioriteten på en delt plads: de almindelige årer med det højeste krav
+-- først, de sjældne (sølv, guld, truesilver) efter dem, og til sidst de to,
+-- der kun findes ét sted.
+local ORES = {
+    { name = "Rich Thorium", skill = 275, color = { 0.75, 1.00, 0.30 }, ids = { 175404, 177388 } },
+    { name = "Small Thorium", skill = 245, color = { 0.40, 0.90, 0.35 }, ids = { 324, 150082, 176643, 123848 } },
+    { name = "Dark Iron", skill = 230, color = { 1.00, 0.30, 0.25 }, ids = { 165658 } },
+    { name = "Mithril", skill = 175, color = { 0.50, 0.95, 1.00 }, ids = { 2040, 150079, 176645, 123310 } },
+    { name = "Iron", skill = 125, color = { 0.45, 0.65, 1.00 }, ids = { 1735 } },
+    { name = "Tin", skill = 65, color = { 0.80, 0.80, 0.80 }, ids = { 1732, 2054, 3764, 103711, 181249 } },
+    { name = "Copper", skill = 1, color = { 1.00, 0.58, 0.25 }, ids = { 1731, 2055, 3763, 103713, 181248 } },
+    { name = "Truesilver", skill = 230, color = { 0.40, 1.00, 0.80 }, ids = { 2047, 150081, 181108, 123309 } },
+    { name = "Gold", skill = 155, color = { 1.00, 0.85, 0.20 }, ids = { 1734, 150080, 181109, 73941 } },
+    { name = "Silver", skill = 75, color = { 1.00, 1.00, 1.00 }, ids = { 1733, 105569, 73940 } },
+    { name = "Lesser Bloodstone", skill = 75, color = { 0.85, 0.55, 1.00 }, ids = { 2653 } },
+    { name = "Incendicite", skill = 65, color = { 0.85, 0.55, 1.00 }, ids = { 1610, 1667 } },
+}
+
+local zones = {}                   -- zone (areaID) → { continent, north, dNorth, west, dWest } eller false
+local seen = {}                    -- pladser, der allerede har fået et mærke i denne hentning
+local retryAt = 0                  -- tidligst her prøves databasen igen
+local databaseMissing = false
+local skillAt                      -- hvornår skill sidst blev læst (nil = læs nu)
+local limit = 0                    -- højeste krav, der vises (0 = ingen årer)
+local skillNote = "not checked yet"
+local nodesKnown, nodesNear = 0, 0
+
+-- Skill og bonus fra de tabeller, de nyere API'er giver.
+local function InfoRank(info)
+    if IsSecret(info) or type(info) ~= "table" then return end
+    local rank = info.rank or info.skillRank or info.skillLevel
+    if not IsNumber(rank) then return end
+    local bonus = info.modifier or info.skillModifier
+    return rank + (IsNumber(bonus) and bonus or 0)
+end
+
+-- Hvad Mining hedder på klientens sprog (til skill-listen).
+local function MiningName()
+    local name
+    if C_Spell and C_Spell.GetSpellInfo then
+        local ok, info = pcall(C_Spell.GetSpellInfo, MINING_SPELLS[1])
+        if ok and not IsSecret(info) and type(info) == "table" then name = info.name end
+    end
+    if name == nil and GetSpellInfo then
+        local ok, text = pcall(GetSpellInfo, MINING_SPELLS[1])
+        if ok then name = text end
+    end
+    if not IsSecret(name) and type(name) == "string" then return name end
+    return "Mining"
+end
+
+-- Figurens Mining-skill, eller nil når det ikke kan læses. Klienterne er ikke
+-- enige om, hvor det står, så de kendte steder prøves efter tur. Et nul stoles
+-- der ikke på («kender ikke Mining» afgøres af KnowsMining).
+local function ReadMiningSkill()
+    -- 1. Direkte på skill line.
+    for _, api in ipairs({ C_SkillInfo and C_SkillInfo.GetSkillLineInfoByID or false,
+        C_TradeSkillUI and C_TradeSkillUI.GetProfessionInfoBySkillLineID or false }) do
+        if api then
+            local ok, info = pcall(api, MINING_LINE)
+            local rank = ok and InfoRank(info)
+            if rank and rank > 0 then return rank end
+        end
+    end
+    -- 2. Figurens to professions.
+    if GetProfessions and GetProfessionInfo then
+        local ok, first, second = pcall(GetProfessions)
+        if ok then
+            local name = MiningName()
+            for i = 1, 2 do
+                local index = i == 1 and first or second
+                if IsNumber(index) then
+                    local okInfo, title, _, rank, _, _, _, line, bonus = pcall(GetProfessionInfo, index)
+                    if okInfo and IsNumber(rank) and rank > 0
+                        and ((IsNumber(line) and line == MINING_LINE) or (not IsSecret(title) and title == name)) then
+                        return rank + (IsNumber(bonus) and bonus or 0)
+                    end
+                end
+            end
+        end
+    end
+    -- 3. Skill-listen (Classic-klienter).
+    if GetNumSkillLines and GetSkillLineInfo then
+        local ok, count = pcall(GetNumSkillLines)
+        if ok and IsNumber(count) then
+            local name = MiningName()
+            for index = 1, min(count, 200) do
+                local okInfo, title, _, _, rank, _, bonus = pcall(GetSkillLineInfo, index)
+                if okInfo and not IsSecret(title) and title == name and IsNumber(rank) and rank > 0 then
+                    return rank + (IsNumber(bonus) and bonus or 0)
+                end
+            end
+        end
+    end
+end
+
+-- Kan figuren Mining overhovedet? Bruges, når selve tallet ikke kan læses.
+local function KnowsMining()
+    local known = (C_SpellBook and C_SpellBook.IsSpellKnown) or IsPlayerSpell or IsSpellKnown
+    if type(known) ~= "function" then return false end
+    for _, spell in ipairs(MINING_SPELLS) do
+        local ok, has = pcall(known, spell)
+        if ok and not IsSecret(has) and has == true then return true end
+    end
+    return false
+end
+
+-- Sætter «limit»: det højeste krav, en åre må have for at blive vist.
+local function UpdateLimit()
+    if db.ore == "all" then
+        limit, skillNote, skillAt = math.huge, "every vein", nil
+        return
+    end
+    local now = GetTime and GetTime()
+    if skillAt and now and now >= skillAt and now - skillAt < NODE_RETRY then return end
+    skillAt = now
+    local rank = ReadMiningSkill()
+    if rank then
+        limit, skillNote = rank, ("Mining %d"):format(rank)
+    elseif KnowsMining() then
+        limit, skillNote = math.huge, "Mining skill could not be read, showing every vein"
+    else
+        limit, skillNote = 0, "this character has no Mining; /d2map ore all shows every vein anyway"
+    end
+end
+
+-- Et zonekort er en ret firkant i verden, så to hjørner er nok til at regne
+-- alle zonens punkter om – i stedet for et opslag i spillet pr. åre.
+local function ZoneTransform(zoneDB, areaID)
+    local zone = zones[areaID]
+    if zone ~= nil then return zone end
+    zone = false
+    local mapID = zoneDB:GetUiMapIdByAreaId(areaID)        -- fejler, til Questie er færdig med at starte
+    if IsNumber(mapID) and mapID > 0 then
+        local continent, north, west = ZoneToWorld(mapID, 0, 0)
+        local continent2, north2, west2 = ZoneToWorld(mapID, 1, 1)
+        if continent and continent == continent2 and north2 ~= north and west2 ~= west then
+            zone = { continent = continent, north = north, dNorth = north2 - north, west = west, dWest = west2 - west }
+        end
+    end
+    zones[areaID] = zone
+    return zone
+end
+
+-- Henter alle pladser for én slags åre og regner dem om til verdenskoordinater,
+-- delt op pr. kontinent. Returnerer false, når databasen ikke er der (endnu).
+local function BuildOre(ore)
+    local get = LibQuestieDB and LibQuestieDB.Object and LibQuestieDB.Object.Get
+    local zoneDB = QuestieModule("ZoneDB")
+    if type(get) ~= "function" or not zoneDB or type(zoneDB.GetUiMapIdByAreaId) ~= "function" then
+        return false
+    end
+    local found = {}
+    for _, id in ipairs(ore.ids) do
+        local ok, spawns = pcall(get, id, "spawns")
+        if ok and not IsSecret(spawns) and type(spawns) == "table" then
+            for areaID, list in pairs(spawns) do
+                local zone = IsNumber(areaID) and type(list) == "table" and ZoneTransform(zoneDB, areaID)
+                if zone then
+                    local store = found[zone.continent]
+                    if not store then
+                        store = { north = {}, west = {}, count = 0 }
+                        found[zone.continent] = store
+                    end
+                    local n = store.count
+                    for i = 1, #list do
+                        local point = list[i]
+                        local x, y = type(point) == "table" and point[1], type(point) == "table" and point[2]
+                        -- (-1, -1) er en åre inde i en instance: den har ingen plads på kortet.
+                        if IsNumber(x) and IsNumber(y) and x >= 0 and x <= 100 and y >= 0 and y <= 100 then
+                            n = n + 1
+                            store.north[n] = zone.north + y / 100 * zone.dNorth
+                            store.west[n] = zone.west + x / 100 * zone.dWest
+                        end
+                    end
+                    store.count = n
+                end
+            end
+        end
+    end
+    ore.found = found
+    return true
+end
+
+-- Lægger årerne omkring spilleren efter de n pins, der allerede står i out, og
+-- returnerer det nye antal. Kaldes, hver gang pins hentes (ca. én gang i sekundet).
+function CollectNodes(out, n, continent, north, west)
+    nodesKnown, nodesNear = 0, 0
+    if db.ore == "off" then return n end
+    UpdateLimit()
+    if limit <= 0 then return n end
+    local now = GetTime and GetTime() or 0
+    local mayBuild = now >= retryAt or now < retryAt - NODE_RETRY
+    local radius = db.span / 2 + NODE_MARGIN
+    wipe(seen)
+    for _, ore in ipairs(ORES) do
+        if ore.skill <= limit then
+            if not ore.found and mayBuild then
+                -- Højst én slags pr. hentning, så ingen opdatering bliver tung;
+                -- den næste kommer med det samme i næste opdatering.
+                mayBuild = false
+                local ok, built = pcall(BuildOre, ore)
+                if ok and built then
+                    databaseMissing = false
+                    forceSync = true
+                else
+                    databaseMissing = true
+                    retryAt = now + NODE_RETRY
+                end
+            end
+            local store = ore.found and ore.found[continent]
+            if store then
+                nodesKnown = nodesKnown + store.count
+                local norths, wests, color = store.north, store.west, ore.color
+                for i = 1, store.count do
+                    local dn, dw = norths[i] - north, wests[i] - west
+                    if dn < radius and dn > -radius and dw < radius and dw > -radius then
+                        local cell = floor(norths[i] / NODE_CELL) * 65536 + floor(wests[i] / NODE_CELL)
+                        if not seen[cell] then
+                            seen[cell] = true
+                            n = n + 1
+                            nodesNear = nodesNear + 1
+                            EmitPin(out, n, continent, norths[i], wests[i], NODE_TEXTURE,
+                                color[1], color[2], color[3], "node")
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return n
+end
+
+-- Læs skill forfra og prøv databasen igen ved næste hentning (indstillingen er lige ændret).
+function RefreshOre()
+    skillAt, retryAt = nil, 0
+end
+
+-- Til /d2map status.
+function NodeStatus()
+    if db.ore == "off" then return "off" end
+    local text = ("%s (%s), %d spots known on this continent, %d near you"):format(
+        db.ore == "all" and "all" or "my skill", skillNote, nodesKnown, nodesNear)
+    if databaseMissing then text = text .. "; no vein data yet (it comes from Questie's database)" end
+    return text
+end
+
+end -- afsnit 6b
+
+--------------------------------------------------------------------------------
 -- 7. Pins på automappet
 --
 -- To takter: pins HENTES fra adapteren ca. én gang i sekundet (SyncPins), og de
@@ -714,23 +1015,32 @@ local wants = {}               -- hvilke slags pins brugeren vil se
 local questInView = {}         -- questID → true, når en af dens pins er inden for rammen
 local nearestRec, nearestDist, nearestX, nearestY = {}, {}, {}, {}
 
-local function SyncPins()
+local nodeError                -- fejlen fra malm-laget, hvis det er gået galt (til /d2map status)
+
+local function SyncPins(continent, north, west)
     forceSync = false
     recordCount = 0
     activeAdapterName = "none"
-    if db.pins == "off" then return end
-    wants.objective = true
-    wants.complete = true
-    wants.available = db.pins == "all"
-    wants.manual = db.pins == "all"
-    local adapter = ActiveAdapter()
-    if not adapter then return end
-    activeAdapterName = adapter.name or "?"
-    local ok, count = pcall(adapter.Collect, records, wants)
-    if ok and IsNumber(count) then
-        recordCount = count
+    local adapter = db.pins ~= "off" and ActiveAdapter()
+    if adapter then
+        wants.objective = true
+        wants.complete = true
+        wants.available = db.pins == "all"
+        wants.manual = db.pins == "all"
+        activeAdapterName = adapter.name or "?"
+        local ok, count = pcall(adapter.Collect, records, wants)
+        if ok and IsNumber(count) then
+            recordCount = count
+        else
+            activeAdapterName = activeAdapterName .. " (error: " .. tostring(count) .. ")"
+        end
+    end
+    -- Malmårerne lægges efter quest-pins, så de aldrig tager pladsen fra dem.
+    local ok, count = pcall(CollectNodes, records, recordCount, continent, north, west)
+    if ok then
+        recordCount, nodeError = count, nil
     else
-        activeAdapterName = activeAdapterName .. " (error: " .. tostring(count) .. ")"
+        nodeError = tostring(count)
     end
 end
 
@@ -1808,7 +2118,7 @@ local function Tick(elapsed)
     sinceSync = sinceSync + elapsed
     if forceSync or sinceSync >= db.pinSyncInterval then
         sinceSync = 0
-        SyncPins()
+        SyncPins(continent, north, west)
         BuildLoops(continent, north, west)
     end
     UpdatePins(continent, north, west)
@@ -1888,6 +2198,7 @@ local AFTER = {
     routeFocus = Resync,
     pins     = Resync,
     source   = Resync,
+    ore      = function() RefreshOre() Resync() end,
 }
 
 local function Set(key, value)
@@ -2088,6 +2399,9 @@ local function CreateOptions()
     byKey.pinScale = MakeSlider(frame, Row(38), "pinScale", LIMITS.pinScale[1], LIMITS.pinScale[2], 0.1, function(v)
         return ("Pin size: %.1fx"):format(v)
     end)
+    byKey.ore = MakeChoice(frame, Row(28), "Ore", "ore", {
+        { "mine", "My skill" }, { "all", "All veins" }, { "off", "Off" },
+    })
     byKey.edgePins = MakeCheck(frame, Row(26), "Show out-of-range targets on the rim", "edgePins")
     byKey.route = MakeCheck(frame, Row(26), "Draw a pull route through each cluster of objectives", "route")
     byKey.pullRange = MakeSlider(frame, Row(40), "pullRange", LIMITS.pullRange[1], LIMITS.pullRange[2], 5, function(v)
@@ -2248,6 +2562,7 @@ local function PrintHelp()
         "/d2map style <color|sepia|ghost> – terrain look (now " .. db.style .. ")",
         "/d2map pins <all|objectives|off> – which quest pins (now " .. db.pins .. ")",
         "/d2map pinsize <0.5-3> – pin scale (now " .. db.pinScale .. ")",
+        "/d2map ore <mine|all|off> – mining veins: those your Mining skill allows, every vein, or none (now " .. db.ore .. ")",
         "/d2map rim <on|off> – out-of-range quest targets and the guide's goal as markers on the rim (now " .. OnOff(db.edgePins) .. ")",
         "/d2map route <on|off> – a pull route through each cluster of objectives (now " .. OnOff(db.route) .. ")",
         "/d2map pull <0-60> – how far the route may stay from the outermost targets, in yards (now " .. db.pullRange .. ")",
@@ -2281,6 +2596,7 @@ local function PrintStatus()
     end
     Print(("pins: %s, source %s, %d known, %d drawn%s"):format(
         db.pins, activeAdapterName, recordCount, pinsShown, mask and "" or "; no mask support, using hard edges"))
+    Print("ore veins: " .. NodeStatus() .. (nodeError and ("; error: " .. nodeError) or ""))
     local clusters, link, pieces, focused = LoopStatus()
     Print(("pull routes: %s, %d clusters (objectives within %d yards belong together), pull range %d yards, %d line pieces drawn; map %s"):format(
         OnOff(db.route), clusters, link, db.pullRange, pieces, db.rotate and "rotates with you" or "north up"))
@@ -2380,6 +2696,9 @@ commands.shape = function(rest) SetChoice("shape", rest, SHAPES, "shape") end
 commands.style = function(rest) SetChoice("style", rest, STYLES, "style") end
 commands.pins = function(rest) SetChoice("pins", rest, PIN_MODES, "pins") end
 commands.pinsize = function(rest) SetNumber("pinScale", rest, "pinsize") end
+commands.ore = function(rest) SetChoice("ore", rest, ORE_MODES, "ore") end
+commands.mining = commands.ore
+commands.nodes = commands.ore
 commands.edge = function(rest) SetFlag("edgePins", rest, "rim markers") end
 commands.rim = commands.edge
 commands.terrain = function(rest) SetFlag("terrain", rest, "terrain") end

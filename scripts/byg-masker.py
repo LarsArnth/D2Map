@@ -13,6 +13,9 @@ WoW-klienter kan læse):
   dot.tga   32 x 32. Prikken i guidens vej: en hvid skive med sort kant. Hvid
       tager den farve, addon'en giver den (grøn, gul), og sort bliver ved med
       at være sort – så prikken kan ses på både lyst og mørkt terræn.
+  node.tga  32 x 32. Mærket for en malmåre: en hvid rude (en firkant på
+      spidsen) med sort kant, farvet pr. slags malm. Ruden kan kendes fra
+      vejens runde prikker, også når den er lille.
 """
 import math
 import pathlib
@@ -48,6 +51,14 @@ def prik(x: float, y: float) -> tuple[float, float]:
     return lys, alfa
 
 
+def rude(x: float, y: float) -> tuple[float, float]:
+    """Hvid rude med sort kant: som prikken, men målt som |x| + |y|. Giver (lysstyrke, alfa)."""
+    r = abs(x) + abs(y)
+    lys = 1 - blød((r - 0.58) / 0.12)
+    alfa = 1 - blød((r - 0.88) / 0.12)
+    return lys, alfa
+
+
 def skriv(navn: str, form, str_: int = STR) -> None:
     # 18 bytes hoved: ingen id, ingen palet, type 2 (ukomprimeret true-color),
     # 32 bit pr. pixel, 8 alfa-bit, første række øverst (0x20).
@@ -72,3 +83,4 @@ def skriv(navn: str, form, str_: int = STR) -> None:
 skriv("mask-round.tga", rund)
 skriv("mask-square.tga", firkant)
 skriv("dot.tga", prik, 32)
+skriv("node.tga", rude, 32)

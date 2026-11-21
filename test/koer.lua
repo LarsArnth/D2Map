@@ -231,6 +231,7 @@ tjek("standard: synlig i bevægelse (54 %), ingen combat-toning", D2MapDB.moveFa
 tjek("standard: 650 yards, drejer med figuren, sepia", D2MapDB.span == 650 and D2MapDB.rotate == true and D2MapDB.style == "sepia")
 tjek("standard: intet på kanten for det, der er uden for rammen", D2MapDB.edgePins == false)
 tjek("terræn er slået fra som standard", D2MapDB.terrain == false)
+tjek("standard: malmårer efter figurens egen Mining-skill", D2MapDB.ore == "mine")
 fyr("PLAYER_LOGIN")
 fyr("PLAYER_ENTERING_WORLD")
 
@@ -602,6 +603,23 @@ slash("source questie")
 kor(1.2)
 tjek("/d2map source questie uden Questie giver ingen pins", #pins() == 0)
 slash("source auto")
+
+print("Nyere Questie (12.8+): registret ligger i et internt modul, ikke i LibStub")
+local nytRegister = {}
+QuestieLoader = { _modules = { HBDPins = { worldmapPinRegistry = { [Questie] = nytRegister } } } }
+local nytIkon = questieIkon("monster", 9, 70, -70)
+register[nytIkon] = nil
+nytRegister[nytIkon] = true
+kor(1.2)
+tjek("Questies pins findes i modulet QuestieLoader._modules.HBDPins", pinVed(-70 * px, 70 * px) ~= nil and #pins() == 1, #pins())
+slash("status")
+local fundet = false
+for i = #chat - 6, #chat do fundet = fundet or (chat[i] and chat[i]:find("source Questie", 1, true) ~= nil) end
+tjek("…og status siger Questie, ikke Blizzard", fundet)
+QuestieLoader._modules.HBDPins = { worldmapPinRegistry = {} }      -- Questie har ikke tegnet noget endnu
+kor(1.2)
+tjek("et modul uden Questies register giver Blizzards quest-punkter", #pins() == 1 and pinVed(-70 * px, 70 * px) == nil, #pins())
+QuestieLoader._modules.HBDPins = nil
 
 print("Egen adapter")
 D2Map.RegisterAdapter("Proeve", {
@@ -991,6 +1009,146 @@ spiller.retning = 1.25
 slash("rotate off")
 slash("source auto")
 
+print("Malmårer")
+local RUDE = "Interface\\AddOns\\D2Map\\Media\\node.tga"
+local function aarer()
+    local t = {}
+    for _, p in ipairs(pins()) do if p.tekstur == RUDE then t[#t + 1] = p end end
+    return t
+end
+local function aareVed(nord, oest)
+    for _, p in ipairs(aarer()) do
+        if taet(p.punkter.CENTER.x, oest * px, 0.05) and taet(p.punkter.CENTER.y, nord * px, 0.05) then return p end
+    end
+end
+local function sidsteStatus(tekst)
+    slash("status")
+    for i = #chat - 7, #chat do
+        if chat[i] and chat[i]:find("ore veins:", 1, true) then return chat[i]:find(tekst, 1, true) ~= nil, chat[i] end
+    end
+    return false, "ingen linje om ore veins"
+end
+-- En attrap af Questies database: objektets id → spawns = { [zone] = { { x, y }, … } } i procent.
+local function plads(nord, oest)
+    local x, y = zonePunkt(nord, oest)
+    return { x, y }
+end
+local spawns = {
+    -- Kobber: to pladser i rammen, én lige uden for, én langt væk, én på et ukendt kort og én i en instance.
+    [1731] = { [12] = { plads(60, 20), plads(-80, 40), plads(0, 290), plads(0, 1500) }, [9999] = { { 50, 50 } }, [1337] = { { -1, -1 } } },
+    [1732] = { [12] = { plads(60, 20), plads(100, -100) } },      -- tin: deler den første plads med kobber
+    [1733] = { [12] = { plads(100, -100), plads(-150, -50) } },   -- sølv: deler plads med tin og har én selv
+    [1735] = { [12] = { plads(30, 150) } },                       -- jern
+}
+local hentet = 0
+LibQuestieDB = { Object = { Get = function(id, felt)
+    assert(felt == "spawns", "D2Map må kun læse spawns")
+    hentet = hentet + 1
+    return spawns[id]
+end } }
+local zonerKlar = false
+QuestieLoader._modules.ZoneDB = { GetUiMapIdByAreaId = function(_, omraade)
+    if not zonerKlar then error("ZoneDB er ikke startet endnu") end
+    if omraade == 12 then return ZONE.id end
+    if omraade == 9999 then return 9999 end
+end }
+slash("pins off")                                      -- kun malmen, og den må ikke afhænge af quest-pins
+kor(1.2)
+tjek("uden Mining vises ingen årer", #aarer() == 0 and hentet == 0, #aarer())
+tjek("…og status forklarer hvorfor", sidsteStatus("has no Mining"))
+slash("ore all")
+kor(1.2)
+tjek("/d2map ore all, før Questie er startet: ingen årer og ingen fejl", D2MapDB.ore == "all" and #aarer() == 0 and root.synlig)
+tjek("…og status siger, at data mangler", sidsteStatus("no vein data yet"))
+zonerKlar = true
+ur = ur + 6                                            -- databasen prøves igen efter 5 sekunder
+kor(2.5)
+tjek("alle årer i rammen vises, én pr. plads", #aarer() == 5 and #pins() == 5, #aarer())
+local kobber, delt = aareVed(-80, 40), aareVed(60, 20)
+tjek("en åre er en lille rude i malmens farve (kobber: orange)", kobber and kobber.bredde == 13
+    and kobber.farve[1] == 1 and taet(kobber.farve[2], 0.58), kobber and kobber.farve[2])
+tjek("en plads delt af kobber og tin får ét mærke: tin (det højeste krav)", delt and taet(delt.farve[1], 0.80)
+    and taet(delt.farve[2], 0.80))
+tjek("sølv viger for tin på en delt plads, men har sin egen (hvid)", taet(aareVed(100, -100).farve[1], 0.80)
+    and aareVed(-150, -50) and aareVed(-150, -50).farve[3] == 1)
+tjek("jern er blåt", aareVed(30, 150) and taet(aareVed(30, 150).farve[1], 0.45))
+tjek("årer giver ingen pull-ruter og intet på kanten", #linjer() == 0 and pinVed(280 * 0.90, 0) == nil)
+tjek("teksturen findes i addon'en", io.open("D2Map/Media/node.tga") ~= nil)
+spiller.vest = spiller.vest - 80                       -- 80 yards mod øst
+kor(0.12)
+tjek("en åre lige uden for rammen dukker op, når man nærmer sig", aareVed(0, 290 - 80) ~= nil and aareVed(60, 20 - 80) ~= nil)
+spiller.vest = spiller.vest + 80
+local foerHentet = hentet
+ur = ur + 60
+kor(3.2)
+tjek("databasen læses én gang pr. slags, ikke hvert sekund", hentet == foerHentet and hentet > 10, hentet)
+tjek("status tæller pladserne", sidsteStatus("9 spots known on this continent, 6 near you"))
+
+-- Figurens skill: kun de årer, den rækker til.
+local skill = { skillRank = 30, skillModifier = 0 }
+C_SkillInfo = { GetSkillLineInfoByID = function(linje) return linje == 186 and skill or nil end }
+slash("ore mine")
+kor(1.2)
+tjek("/d2map ore mine med Mining 30: kun kobber", #aarer() == 2 and aareVed(-80, 40) and taet(aareVed(60, 20).farve[2], 0.58), #aarer())
+tjek("…og status viser tallet", sidsteStatus("Mining 30"))
+skill = { skillRank = 60, skillModifier = 10 }         -- 60 + 10 fra udstyr = 70
+kor(1.2)
+tjek("skill læses ikke oftere end hvert 5. sekund", #aarer() == 2, #aarer())
+ur = ur + 6
+kor(1.2)
+tjek("Mining 70 (med bonus): tin kommer til, og den delte plads bliver tin", #aarer() == 3 and aareVed(100, -100)
+    and taet(aareVed(60, 20).farve[2], 0.80), #aarer())
+skill = { rank = 80 }
+ur = ur + 6
+kor(1.2)
+tjek("Mining 80: sølv kommer til", #aarer() == 4 and aareVed(-150, -50), #aarer())
+C_SkillInfo = nil
+GetProfessions = function() return 5, 7 end
+GetProfessionInfo = function(nr)
+    if nr == 7 then return "Mining", "ikon", 130, 150, 2, 0, 186, 0 end
+    return "Skinning", "ikon", 10, 75, 1, 0, 393, 0
+end
+ur = ur + 6
+kor(1.2)
+tjek("skill fra GetProfessions (130): jern kommer til", #aarer() == 5 and aareVed(30, 150), #aarer())
+GetProfessions, GetProfessionInfo = nil, nil
+GetSpellInfo = function(id) return id == 2575 and "Bergbau" or nil end
+GetNumSkillLines = function() return 3 end
+GetSkillLineInfo = function(nr)
+    if nr == 1 then return "Berufe", true, true, 0, 0, 0, 0 end
+    if nr == 2 then return "Bergbau", false, false, 40, 0, 0, 75 end
+    return "Kochkunst", false, false, 300, 0, 0, 300
+end
+ur = ur + 6
+kor(1.2)
+tjek("skill fra skill-listen, på klientens sprog (40): kun kobber", #aarer() == 2, #aarer())
+GetNumSkillLines, GetSkillLineInfo, GetSpellInfo = nil, nil, nil
+IsPlayerSpell = function(id) return id == 2580 end      -- Find Minerals
+ur = ur + 6
+kor(1.2)
+tjek("kan skill ikke læses, men figuren kan Mining: alle årer", #aarer() == 5 and sidsteStatus("could not be read"), #aarer())
+IsPlayerSpell = function() return HEMMELIG end
+ur = ur + 6
+kor(1.2)
+tjek("hemmelige svar tæller som «ved det ikke»: ingen årer", #aarer() == 0, #aarer())
+IsPlayerSpell = nil
+LibQuestieDB.Object.Get = function() error("databasen fejler") end
+slash("ore all")
+kor(1.2)
+tjek("allerede hentede årer bliver, selv om databasen fejler bagefter", #aarer() == 5 and root.synlig, #aarer())
+slash("ore vrøvl")
+tjek("et ukendt valg ændrer ingenting", D2MapDB.ore == "all")
+slash("options")
+tjek("vinduet har et valg for malm, og det følger med", vindue.synlig and felt.ore.buttons[2].afkrydset == true and felt.ore.buttons[1].afkrydset == false)
+felt.ore.buttons[3]:Klik()
+kor(1.2)
+tjek("valget Off fjerner årerne", D2MapDB.ore == "off" and #aarer() == 0 and sidsteStatus("ore veins: off"))
+felt.ore.buttons[1]:Klik()
+slash("options")
+slash("pins all")
+kor(1.2)
+tjek("quest-pins er tilbage, og uden Mining er der stadig ingen årer", D2MapDB.ore == "mine" and #aarer() == 0 and #pins() >= 1, #pins())
+
 print("Tastaturgenvej, når Alt+M peger på en addon, der er slået fra")
 bindinger["ALT-M"] = "DandyMap_AUTOMAP"                -- DandyMap er ikke indlæst: handlingen findes ikke
 D2MapDB.bindingOffered = false
@@ -1022,7 +1180,7 @@ slash("reset")
 tjek("/d2map reset", D2MapDB.opacity == 0 and D2MapDB.span == 650 and D2MapDB.bindingOffered == true
     and D2MapDB.terrain == false and D2MapDB.route == true and D2MapDB.rotate == true and D2MapDB.waypoint == true
     and D2MapDB.moveFade == true and D2MapDB.moveOpacity == 54 and D2MapDB.combatFade == false
-    and D2MapDB.pullRange == 40 and D2MapDB.edgePins == false and D2MapDB.routeFocus == true)
+    and D2MapDB.pullRange == 40 and D2MapDB.edgePins == false and D2MapDB.routeFocus == true and D2MapDB.ore == "mine")
 -- Med standarderne: usynlig når man står stille, synlig når man går.
 kor(1)
 tjek("standard: usynligt, når man står stille", taet(canvas.alfa, 0) and taet(pinLayer.alfa, 0), canvas.alfa)

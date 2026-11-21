@@ -1,13 +1,13 @@
 # D2Map
 
 Et Diablo II-inspireret automap til **WoW: Forever** (interface 16001): spillets
-egne minimap-fliser og Questies quest-pins, halvgennemsigtigt midt på skærmen
+egne minimap-fliser, Questies quest-pins og malmårer (mining nodes), halvgennemsigtigt midt på skærmen
 med nord opad og spilleren i midten. Rammen tager aldrig imod mus, så kamera,
 bevægelse og targeting går lige igennem.
 
 ```sh
 ./installer.sh        # kopierer D2Map/ ind i spillets AddOns-mappe
-lua test/koer.lua     # 189 tjek mod en attrap af WoW's API
+lua test/koer.lua     # 221 tjek mod en attrap af WoW's API
 lua test/tegn.lua     # tegner pull-ruterne for nogle prøvesæt til docs/former.svg
 ```
 
@@ -32,6 +32,7 @@ ajour:
 | `/d2map style <color\|sepia\|ghost>` | `ghost` lægger terrænet additivt ovenpå, mest som i Diablo II |
 | `/d2map pins <all\|objectives\|off>` | Alle Questies pins, kun mål og afleveringer, eller ingen |
 | `/d2map pinsize <0.5-3>` | Størrelse på pins |
+| `/d2map ore <mine\|all\|off>` | Malmårer: dem, figurens Mining-skill rækker til (standard), alle, eller ingen |
 | `/d2map rim <on\|off>` | Det, der ligger uden for rammen, som mærker på kanten: nærmeste pin for hver quest og guidens mål (fra som standard) |
 | `/d2map route <on\|off>` | En pull-rute gennem hver klynge af quest-mål (til som standard) |
 | `/d2map focus <on\|off>` | Pull-ruter kun om de quests, Factoruides aktuelle trin handler om (til som standard; uden guide: alle quests) |
@@ -63,10 +64,10 @@ En ny bruger ser altså ingenting, før figuren flytter sig.
 | Fil | Indhold |
 |---|---|
 | `D2Map/D2Map.toc` | Metadata, `SavedVariablesPerCharacter: D2MapDB`, Questie som valgfri afhængighed |
-| `D2Map/D2Map.lua` | Hele addon'en, delt i 15 afsnit (defaults, koordinater, rammer, terræn, adaptere, pins, pull-ruter, guidens vej, fading, løkke, `Set()`, indstillingsvindue, kommandoer, events) |
+| `D2Map/D2Map.lua` | Hele addon'en, delt i 15 afsnit (defaults, koordinater, rammer, terræn, adaptere, malmårer (6b), pins, pull-ruter, guidens vej, fading, løkke, `Set()`, indstillingsvindue, kommandoer, events) |
 | `D2Map/Bindings.xml` | De tre tastaturgenveje |
 | `D2Map/Data/MinimapTiles.lua` | Fil-id'er for minimap-fliserne. **Genereret** af `scripts/byg-fliser.lua` |
-| `D2Map/Media/*.tga` | Maskerne til de bløde kanter og prikken til guidens vej. **Genereret** af `scripts/byg-masker.py` |
+| `D2Map/Media/*.tga` | Maskerne til de bløde kanter, prikken til guidens vej og ruden til malmårer. **Genereret** af `scripts/byg-masker.py` |
 | `scripts/pak.sh` | Pakker `dist/D2Map-<version>.zip` (mappen `D2Map/` med licens og noter) til CurseForge |
 | `scripts/udgiv.py` | Uploader zip-filen til CurseForge (token fra `~/.config/d2map/curseforge.env`, `--toer` = tørløb) |
 | `curseforge/` | Engelsk beskrivelse, logo og felterne til CurseForge-projektet |
@@ -89,13 +90,45 @@ En ny bruger ser altså ingenting, før figuren flytter sig.
   forkert sted.
 - **Koordinater.** Verden: første tal vokser mod nord, andet mod vest. Skærmen:
   `x = (spillerVest - punktVest) × px/yard`, `y = (punktNord - spillerNord) × px/yard`.
-- **Questie.** Alle Questies kort-ikoner står i
-  `LibStub("HereBeDragonsQuestie-Pins-2.0").worldmapPinRegistry[Questie]`.
+- **Questie.** Alle Questies kort-ikoner står i dens eget pin-register. Fra
+  Questie 12.8 er det et internt modul,
+  `QuestieLoader._modules.HBDPins.worldmapPinRegistry[Questie]`; før det lå det
+  i `LibStub("HereBeDragonsQuestie-Pins-2.0")`. Begge prøves (modulet først).
+  Det var skiftet, der fik D2Map til at «gå i stykker» 2026-11-20: Questie blev
+  opdateret til 12.11.1, registret kunne ikke findes, og automappet faldt
+  tilbage til spillets egne quest-punkter (ét pr. quest) uden at sige noget.
+  `/d2map status` viser kilden («source Questie» eller «Blizzard quest log») –
+  kig dér først, hvis pins mangler efter en Questie-opdatering.
   Hvert ikon har `x`, `y` (zone-procent), `UiMapID`, `data.Type`
   (`monster`/`object`/`item`/`event`/`complete`/`available`/`manual`), `texture`
   og `hidden` (Questies egne filtre). Adapteren læser kun; zone → verden huskes
   pr. ikon. Uden Questie bruges spillets egne quest-punkter
   (`C_QuestLog.GetQuestsOnMap`).
+- **Malmårer** (afsnit 6b, version 1.8.0; Lars: «er begyndt at mine»).
+  Spillet fortæller ikke addons, hvilke årer der står fremme (minimappets gule
+  prikker kan ikke læses), så automappet viser *pladserne*, hvor en åre kan
+  stå – som GatherMate. De kommer fra Questies database: QuestieDB har hver
+  slags åre som et objekt, og `LibQuestieDB.Object.Get(id, "spawns")` giver
+  `{ [zone] = { { x, y }, … } }` i procent af zonekortet (ca. 14.000 punkter
+  for de 12 slags; id'erne i `ORES` er tjekket mod databasens navne). Zonen
+  (et areaID) bliver til et kort med `ZoneDB:GetUiMapIdByAreaId` fra Questies
+  moduler, og fordi et zonekort er en ret firkant i verden, regnes alle
+  zonens punkter om ud fra to hjørner. Hver slags hentes først, når den skal
+  vises, én slags pr. opdatering, og kun én gang. Mange pladser deles af
+  flere slags (sølv/guld står, hvor der ellers er tin/jern/mithril): der
+  tegnes ét mærke pr. plads, i farven for den almindelige slags med det
+  højeste krav, figuren kan mine. Mærket er en rude (`Media/node.tga`) farvet
+  pr. slags: kobber orange, tin grå, sølv hvid, jern blå, guld gul, mithril
+  lyseblå, truesilver turkis, dark iron rød, thorium grøn.
+  **Skill:** med «My skill» (standard) vises kun årer, figurens Mining rækker
+  til, og en figur uden Mining ser ingenting. Tallet læses højst hvert 5.
+  sekund fra det første sted, der svarer: `C_SkillInfo.GetSkillLineInfoByID(186)`,
+  `C_TradeSkillUI.GetProfessionInfoBySkillLineID`, `GetProfessions` eller
+  skill-listen. Kan tallet ikke læses, men figuren kan Mining (spell-tjek),
+  vises alle årer. `/d2map status` skriver, hvad der blev fundet («Mining 37»).
+  Malmen ligger efter quest-pins i samme liste (`kind = "node"`), så den aldrig
+  tager pladsen fra dem, og den indgår hverken i pull-ruter eller på kanten.
+  Uden Questie er der ingen malm – det er dens database.
 - **To takter.** Pins *hentes* fra adapteren én gang i sekundet og *flyttes*
   hvert 0,1 sekund. `OnUpdate` sidder på selve rammen, så et skjult automap
   koster ingenting.
@@ -213,7 +246,9 @@ skiftes ud (ingen `C_Map`), og fliserne skal hentes med sti i stedet for fil-id.
 Lars' skærmbilleder og tilbagemeldinger 2026-11-11: terræn, bløde runde kanter,
 Questies pins og spillerens pil (1.0), indstillingsvinduet (1.1), klyngeformerne
 (1.3), guidens vej (1.4) og den lyse grønne prik (1.5.1) virker. Ikke set i
-spillet endnu: det samlede flueben for kanten (1.6.0), stregen til Shortest
+spillet endnu: malmårerne og opslaget i Questies nye modul (1.8.0, kun prøvet
+mod attrappen – især er det ikke bekræftet, hvilken af de fire måder at læse
+Mining-skill på Forever svarer på), det samlede flueben for kanten (1.6.0), stregen til Shortest
 Path Forevers næste knæk (1.6.1) og begrænsningen til guidens aktuelle trin
 (1.7.0). Pull-ruterne (1.6.0) er set i spillet, men ikke gennemprøvet – især
 klyngernes lænkeafstand er et gæt, indtil den er set mod flere af Questies
