@@ -20,6 +20,8 @@ Spilversionen findes ved at spørge CurseForge om dens liste og vælge den, der
 passer til interface-nummeret i toc-filen (16001 = WoW: Forever 1.60.x).
 Rammer det forkert, så brug --spilversion <id> (listen vises med --versioner).
 """
+from __future__ import annotations      # så scriptet også kører på en ældre python3 (3.9)
+
 import argparse
 import json
 import os
