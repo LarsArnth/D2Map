@@ -1053,9 +1053,19 @@ QuestieLoader._modules.ZoneDB = { GetUiMapIdByAreaId = function(_, omraade)
     if omraade == 9999 then return 9999 end
 end }
 slash("pins off")                                      -- kun malmen, og den må ikke afhænge af quest-pins
+-- En figur med Skinning og Cooking: professions kan læses, og Mining er ikke blandt dem.
+GetProfessions = function() return 5, nil, nil, nil, 9 end
+GetProfessionInfo = function(nr)
+    if nr == 9 then return "Cooking", "ikon", 50, 75, 1, 0, 185, 0 end
+    return "Skinning", "ikon", 10, 75, 1, 0, 393, 0
+end
+ur = ur + 6                                            -- skill læses højst hvert 5. sekund
 kor(1.2)
 tjek("uden Mining vises ingen årer", #aarer() == 0 and hentet == 0, #aarer())
 tjek("…og status forklarer hvorfor", sidsteStatus("has no Mining"))
+tjek("diagnosen i D2MapDB viser, hvad der blev læst", D2MapDB.oreDiag and D2MapDB.oreDiag.limit == 0
+    and D2MapDB.oreDiag.skillTries[1]:find("Cooking 50 line 185", 1, true) ~= nil, D2MapDB.oreDiag and D2MapDB.oreDiag.skillTries[1])
+GetProfessions, GetProfessionInfo = nil, nil
 slash("ore all")
 kor(1.2)
 tjek("/d2map ore all, før Questie er startet: ingen årer og ingen fejl", D2MapDB.ore == "all" and #aarer() == 0 and root.synlig)
@@ -1083,6 +1093,11 @@ ur = ur + 60
 kor(3.2)
 tjek("databasen læses én gang pr. slags, ikke hvert sekund", hentet == foerHentet and hentet > 10, hentet)
 tjek("status tæller pladserne", sidsteStatus("9 spots known on this continent, 6 near you"))
+tjek("diagnosen har hentningerne pr. slags", D2MapDB.oreDiag.builds.Copper == "continent 0: 4" and D2MapDB.oreDiag.known == 9,
+    D2MapDB.oreDiag.builds.Copper)
+local linje = 0
+for _, t in ipairs(chat) do if t:find("mining veins shown", 1, true) then linje = linje + 1 end end
+tjek("én linje i chatten, når årerne er hentet (ikke én pr. sekund)", linje == 1, linje)
 
 -- Figurens skill: kun de årer, den rækker til.
 local skill = { skillRank = 30, skillModifier = 0 }
@@ -1103,14 +1118,14 @@ ur = ur + 6
 kor(1.2)
 tjek("Mining 80: sølv kommer til", #aarer() == 4 and aareVed(-150, -50), #aarer())
 C_SkillInfo = nil
-GetProfessions = function() return 5, 7 end
+GetProfessions = function() return 5, nil, 7 end       -- Mining på 3. plads (Forever bruger flere end to)
 GetProfessionInfo = function(nr)
     if nr == 7 then return "Mining", "ikon", 130, 150, 2, 0, 186, 0 end
     return "Skinning", "ikon", 10, 75, 1, 0, 393, 0
 end
 ur = ur + 6
 kor(1.2)
-tjek("skill fra GetProfessions (130): jern kommer til", #aarer() == 5 and aareVed(30, 150), #aarer())
+tjek("skill fra GetProfessions, også på 3. plads (130): jern kommer til", #aarer() == 5 and aareVed(30, 150), #aarer())
 GetProfessions, GetProfessionInfo = nil, nil
 GetSpellInfo = function(id) return id == 2575 and "Bergbau" or nil end
 GetNumSkillLines = function() return 3 end
@@ -1130,7 +1145,7 @@ tjek("kan skill ikke læses, men figuren kan Mining: alle årer", #aarer() == 5 
 IsPlayerSpell = function() return HEMMELIG end
 ur = ur + 6
 kor(1.2)
-tjek("hemmelige svar tæller som «ved det ikke»: ingen årer", #aarer() == 0, #aarer())
+tjek("kan hverken skill eller spells læses: alle årer hellere end ingen", #aarer() == 5, #aarer())
 IsPlayerSpell = nil
 LibQuestieDB.Object.Get = function() error("databasen fejler") end
 slash("ore all")
@@ -1147,7 +1162,7 @@ felt.ore.buttons[1]:Klik()
 slash("options")
 slash("pins all")
 kor(1.2)
-tjek("quest-pins er tilbage, og uden Mining er der stadig ingen årer", D2MapDB.ore == "mine" and #aarer() == 0 and #pins() >= 1, #pins())
+tjek("quest-pins er tilbage, og årerne med dem", D2MapDB.ore == "mine" and #aarer() == 5 and #pins() >= 6, #pins())
 
 print("Tastaturgenvej, når Alt+M peger på en addon, der er slået fra")
 bindinger["ALT-M"] = "DandyMap_AUTOMAP"                -- DandyMap er ikke indlæst: handlingen findes ikke

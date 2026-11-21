@@ -1,0 +1,2 @@
+- **Mining veins now show up.** 1.8.0 only looked at the first two profession slots and missed Mining on WoW: Forever, so no veins were shown. It now reads every slot, the way TradeSkillMaster does, and shows every vein rather than none when it cannot tell your skill.
+- The first time veins are loaded, a line in the chat says how many there are.

@@ -774,6 +774,8 @@ local skillAt                      -- hvornår skill sidst blev læst (nil = læ
 local limit = 0                    -- højeste krav, der vises (0 = ingen årer)
 local skillNote = "not checked yet"
 local nodesKnown, nodesNear = 0, 0
+local buildNotes = {}              -- slags → hvad hentningen gav (til diagnosen)
+local reported = false             -- er linjen i chatten skrevet i denne session?
 
 -- Skill og bonus fra de tabeller, de nyere API'er giver.
 local function InfoRank(info)
@@ -799,63 +801,100 @@ local function MiningName()
     return "Mining"
 end
 
+-- Hvad hvert forsøg på at læse skill gav (til diagnosen i D2MapDB.oreDiag).
+local tries = {}
+
+local function Try(source, result)
+    tries[#tries + 1] = source .. ": " .. tostring(result)
+end
+
 -- Figurens Mining-skill, eller nil når det ikke kan læses. Klienterne er ikke
--- enige om, hvor det står, så de kendte steder prøves efter tur. Et nul stoles
--- der ikke på («kender ikke Mining» afgøres af KnowsMining).
+-- enige om, hvor det står, så de kendte steder prøves efter tur. Andet svar:
+-- true, når mindst ét sted svarede helt og Mining ikke var der (= figuren har
+-- ikke Mining), ellers nil (= ved det ikke).
 local function ReadMiningSkill()
-    -- 1. Direkte på skill line.
-    for _, api in ipairs({ C_SkillInfo and C_SkillInfo.GetSkillLineInfoByID or false,
-        C_TradeSkillUI and C_TradeSkillUI.GetProfessionInfoBySkillLineID or false }) do
+    wipe(tries)
+    local complete = false
+    -- 1. Figurens professions, som TradeSkillMaster læser dem på Forever: ALLE
+    -- pladser, GetProfessions giver (ikke kun de to første).
+    if GetProfessions and GetProfessionInfo then
+        local slots = { pcall(GetProfessions) }
+        if slots[1] then
+            local name = MiningName()
+            complete = true
+            for i = 2, max(#slots, 7) do
+                local index = slots[i]
+                if IsNumber(index) then
+                    local okInfo, title, _, rank, _, _, _, line, bonus = pcall(GetProfessionInfo, index)
+                    if okInfo and IsNumber(rank) then
+                        Try("GetProfessionInfo(" .. index .. ")", tostring(title) .. " " .. rank .. " line " .. tostring(line))
+                        if (IsNumber(line) and line == MINING_LINE) or (not IsSecret(title) and title == name) then
+                            if rank > 0 then return rank + (IsNumber(bonus) and bonus or 0) end
+                        end
+                    else
+                        complete = false
+                        Try("GetProfessionInfo(" .. index .. ")", okInfo and "no number" or title)
+                    end
+                elseif index ~= nil then
+                    complete = false
+                end
+            end
+        else
+            Try("GetProfessions", slots[2])
+        end
+    end
+    -- 2. Direkte på skill line.
+    for source, api in pairs({ ["C_SkillInfo.GetSkillLineInfoByID"] = C_SkillInfo and C_SkillInfo.GetSkillLineInfoByID or false,
+        ["C_TradeSkillUI.GetProfessionInfoBySkillLineID"] = C_TradeSkillUI and C_TradeSkillUI.GetProfessionInfoBySkillLineID or false }) do
         if api then
             local ok, info = pcall(api, MINING_LINE)
             local rank = ok and InfoRank(info)
+            Try(source, ok and (rank or type(info)) or info)
             if rank and rank > 0 then return rank end
         end
     end
-    -- 2. Figurens to professions.
-    if GetProfessions and GetProfessionInfo then
-        local ok, first, second = pcall(GetProfessions)
-        if ok then
+    -- 3. Skill-listen (Classic-klienter; TSM's reserve). Nogle klienter giver en
+    -- tabel i stedet for flere værdier.
+    local count = C_SkillInfo and C_SkillInfo.GetNumSkillLines or GetNumSkillLines
+    local reader = C_SkillInfo and C_SkillInfo.GetSkillLineInfo or GetSkillLineInfo
+    if count and reader then
+        local ok, lines = pcall(count)
+        if ok and IsNumber(lines) then
             local name = MiningName()
-            for i = 1, 2 do
-                local index = i == 1 and first or second
-                if IsNumber(index) then
-                    local okInfo, title, _, rank, _, _, _, line, bonus = pcall(GetProfessionInfo, index)
-                    if okInfo and IsNumber(rank) and rank > 0
-                        and ((IsNumber(line) and line == MINING_LINE) or (not IsSecret(title) and title == name)) then
-                        return rank + (IsNumber(bonus) and bonus or 0)
-                    end
+            Try("skill lines", lines)
+            for index = 1, min(lines, 200) do
+                local okInfo, title, _, _, rank, _, bonus = pcall(reader, index)
+                if okInfo and type(title) == "table" and not IsSecret(title) then
+                    local info = title
+                    title = info.skillName or info.name
+                    rank = InfoRank(info)
+                    bonus = 0
                 end
-            end
-        end
-    end
-    -- 3. Skill-listen (Classic-klienter).
-    if GetNumSkillLines and GetSkillLineInfo then
-        local ok, count = pcall(GetNumSkillLines)
-        if ok and IsNumber(count) then
-            local name = MiningName()
-            for index = 1, min(count, 200) do
-                local okInfo, title, _, _, rank, _, bonus = pcall(GetSkillLineInfo, index)
                 if okInfo and not IsSecret(title) and title == name and IsNumber(rank) and rank > 0 then
                     return rank + (IsNumber(bonus) and bonus or 0)
                 end
             end
         end
     end
+    return nil, complete
 end
 
 -- Kan figuren Mining overhovedet? Bruges, når selve tallet ikke kan læses.
 local function KnowsMining()
-    local known = (C_SpellBook and C_SpellBook.IsSpellKnown) or IsPlayerSpell or IsSpellKnown
-    if type(known) ~= "function" then return false end
-    for _, spell in ipairs(MINING_SPELLS) do
-        local ok, has = pcall(known, spell)
-        if ok and not IsSecret(has) and has == true then return true end
+    for _, known in ipairs({ IsPlayerSpell or false, C_SpellBook and C_SpellBook.IsSpellKnown or false, IsSpellKnown or false }) do
+        if known then
+            for _, spell in ipairs(MINING_SPELLS) do
+                local ok, has = pcall(known, spell)
+                if ok and not IsSecret(has) and has == true then return true end
+            end
+        end
     end
     return false
 end
 
--- Sætter «limit»: det højeste krav, en åre må have for at blive vist.
+-- Sætter «limit»: det højeste krav, en åre må have for at blive vist. Kun når
+-- det er helt sikkert, at figuren ikke har Mining, vises ingen årer; kan skill
+-- ikke læses, vises dem alle hellere end ingen.
 local function UpdateLimit()
     if db.ore == "all" then
         limit, skillNote, skillAt = math.huge, "every vein", nil
@@ -864,10 +903,10 @@ local function UpdateLimit()
     local now = GetTime and GetTime()
     if skillAt and now and now >= skillAt and now - skillAt < NODE_RETRY then return end
     skillAt = now
-    local rank = ReadMiningSkill()
+    local rank, noMining = ReadMiningSkill()
     if rank then
         limit, skillNote = rank, ("Mining %d"):format(rank)
-    elseif KnowsMining() then
+    elseif KnowsMining() or not noMining then
         limit, skillNote = math.huge, "Mining skill could not be read, showing every vein"
     else
         limit, skillNote = 0, "this character has no Mining; /d2map ore all shows every vein anyway"
@@ -932,13 +971,28 @@ local function BuildOre(ore)
     return true
 end
 
+-- Diagnose: skrives i D2MapDB og dermed i SavedVariables ved /reload og log
+-- ud, så det kan læses uden for spillet, hvis årerne ikke dukker op.
+local function WriteDiagnosis(continent)
+    db.oreDiag = {
+        when = date and date("%Y-%m-%d %H:%M:%S") or nil,
+        mode = db.ore, note = skillNote, limit = limit < math.huge and limit or "all",
+        skillTries = { table.concat(tries, " | ") }, builds = buildNotes, continent = continent,
+        known = nodesKnown, near = nodesNear, databaseMissing = databaseMissing,
+        questieDB = LibQuestieDB ~= nil, zoneDB = QuestieModule("ZoneDB") ~= nil,
+    }
+end
+
 -- Lægger årerne omkring spilleren efter de n pins, der allerede står i out, og
 -- returnerer det nye antal. Kaldes, hver gang pins hentes (ca. én gang i sekundet).
 function CollectNodes(out, n, continent, north, west)
     nodesKnown, nodesNear = 0, 0
     if db.ore == "off" then return n end
     UpdateLimit()
-    if limit <= 0 then return n end
+    if limit <= 0 then
+        WriteDiagnosis(continent)
+        return n
+    end
     local now = GetTime and GetTime() or 0
     local mayBuild = now >= retryAt or now < retryAt - NODE_RETRY
     local radius = db.span / 2 + NODE_MARGIN
@@ -953,9 +1007,13 @@ function CollectNodes(out, n, continent, north, west)
                 if ok and built then
                     databaseMissing = false
                     forceSync = true
+                    local parts = {}
+                    for c, store in pairs(ore.found) do parts[#parts + 1] = ("continent %s: %d"):format(tostring(c), store.count) end
+                    buildNotes[ore.name] = #parts > 0 and table.concat(parts, ", ") or "no spots"
                 else
                     databaseMissing = true
                     retryAt = now + NODE_RETRY
+                    buildNotes[ore.name] = ok and "Questie's database not ready" or ("error: " .. tostring(built))
                 end
             end
             local store = ore.found and ore.found[continent]
@@ -977,6 +1035,12 @@ function CollectNodes(out, n, continent, north, west)
                 end
             end
         end
+    end
+    WriteDiagnosis(continent)
+    -- Én linje i chatten pr. session, når årerne er hentet, så man kan se, at de er der.
+    if not reported and not databaseMissing and nodesKnown > 0 then
+        reported = true
+        Print(("mining veins shown (%s): %d spots on this continent, %d near you. /d2map ore changes it."):format(skillNote, nodesKnown, nodesNear))
     end
     return n
 end

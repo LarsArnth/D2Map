@@ -7,7 +7,7 @@ bevægelse og targeting går lige igennem.
 
 ```sh
 ./installer.sh        # kopierer D2Map/ ind i spillets AddOns-mappe
-lua test/koer.lua     # 221 tjek mod en attrap af WoW's API
+lua test/koer.lua     # 224 tjek mod en attrap af WoW's API
 lua test/tegn.lua     # tegner pull-ruterne for nogle prøvesæt til docs/former.svg
 ```
 
@@ -121,11 +121,18 @@ En ny bruger ser altså ingenting, før figuren flytter sig.
   pr. slags: kobber orange, tin grå, sølv hvid, jern blå, guld gul, mithril
   lyseblå, truesilver turkis, dark iron rød, thorium grøn.
   **Skill:** med «My skill» (standard) vises kun årer, figurens Mining rækker
-  til, og en figur uden Mining ser ingenting. Tallet læses højst hvert 5.
-  sekund fra det første sted, der svarer: `C_SkillInfo.GetSkillLineInfoByID(186)`,
-  `C_TradeSkillUI.GetProfessionInfoBySkillLineID`, `GetProfessions` eller
-  skill-listen. Kan tallet ikke læses, men figuren kan Mining (spell-tjek),
-  vises alle årer. `/d2map status` skriver, hvad der blev fundet («Mining 37»).
+  til. Tallet læses højst hvert 5. sekund, først som TradeSkillMaster gør på
+  Forever: **alle** pladser fra `GetProfessions` med `GetProfessionInfo`
+  (1.8.0 så kun på de to første og fandt ikke Lars' Mining 151 – ingen årer).
+  Derefter `C_SkillInfo.GetSkillLineInfoByID(186)`,
+  `C_TradeSkillUI.GetProfessionInfoBySkillLineID` og skill-listen. Ingen årer
+  vises kun, når professions kunne læses helt, og Mining ikke var der; ved
+  tvivl vises alle hellere end ingen. `/d2map status` skriver, hvad der blev
+  fundet («Mining 151»), og første gang årerne er hentet, står det i chatten.
+  **Diagnose:** `D2MapDB.oreDiag` i figurens
+  `WTF/Account/*/<realm>/<figur>/SavedVariables/D2Map.lua` har hvert
+  skill-forsøg, hvad hver slags åre gav pr. kontinent, og om Questies database
+  og ZoneDB fandtes. Skrives ved `/reload` og log ud – læs den, før du gætter.
   Malmen ligger efter quest-pins i samme liste (`kind = "node"`), så den aldrig
   tager pladsen fra dem, og den indgår hverken i pull-ruter eller på kanten.
   Uden Questie er der ingen malm – det er dens database.
