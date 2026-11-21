@@ -778,6 +778,7 @@ local OTHER_COLOR = { 0.85, 0.55, 1.00 }         -- Incendicite, Bloodstone, Amb
 
 local placed = setmetatable({}, { __mode = "k" })   -- fund → { map, x, y, continent, north, west }
 local mined = {}                   -- { time, continent, north, west } for de seneste Mining-casts
+local hinted = false               -- er det sagt i chatten, at FDG mangler?
 local status = "not checked yet"
 local liveTotal, liveNear = 0, 0
 
@@ -865,6 +866,12 @@ function CollectNodes(out, n, continent, north, west)
     local source = FDGWorldMarkersNodeSource
     if type(source) ~= "function" then
         status = "needs Forever Dual Gathering (it reads the live veins off the minimap)"
+        -- Én gang pr. session i chatten, ellers ser man bare ingenting (2026-11-21).
+        if not hinted then
+            hinted = true
+            Print("mining veins need Forever Dual Gathering: enable it in the AddOns list and /reload. "
+                .. "Its own HUD can stay off. /d2map ore off hides this.")
+        end
         return n
     end
     local ok, nodes = pcall(source)

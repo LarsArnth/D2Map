@@ -1040,6 +1040,9 @@ kor(1.2)
 tjek("standard: malmårer slået til", D2MapDB.ore == "on")
 tjek("uden Forever Dual Gathering vises ingen årer", #aarer() == 0)
 tjek("…og status siger, hvad der mangler", sidsteStatus("needs Forever Dual Gathering"))
+local hint = 0
+for _, linje in ipairs(chat) do if linje:find("enable it in the AddOns list", 1, true) then hint = hint + 1 end end
+tjek("…og det står i chatten, men kun én gang", hint == 1, hint)
 local fdg = {}
 FDGWorldMarkersNodeSource = function() return fdg, {}, {} end
 fdg = {
