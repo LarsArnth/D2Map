@@ -1,0 +1,3 @@
+- **Live mining veins and herbs, from the game itself.** D2Map now puts the real minimap underneath the automap, at the same scale and rotation, so the minimap's own vein and herb icons show exactly where they are and vanish the moment you gather them. No other addon needed.
+- While it is on, the minimap is not in its corner; hide the automap (Alt+M) or choose "Minimap: In its corner" in `/d2map` to get it back. A slider sets how visible the minimap is under the automap (40 % by default).
+- `/d2map ore <on|off>` and `/d2map minimap <0-100>` do the same from the chat.

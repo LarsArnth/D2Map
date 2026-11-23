@@ -7,7 +7,7 @@ bevægelse og targeting går lige igennem.
 
 ```sh
 ./installer.sh        # kopierer D2Map/ ind i spillets AddOns-mappe
-lua test/koer.lua     # 219 tjek mod en attrap af WoW's API
+lua test/koer.lua     # 221 tjek mod en attrap af WoW's API
 lua test/tegn.lua     # tegner pull-ruterne for nogle prøvesæt til docs/former.svg
 ```
 
@@ -32,7 +32,9 @@ ajour:
 | `/d2map style <color\|sepia\|ghost>` | `ghost` lægger terrænet additivt ovenpå, mest som i Diablo II |
 | `/d2map pins <all\|objectives\|off>` | Alle Questies pins, kun mål og afleveringer, eller ingen |
 | `/d2map pinsize <0.5-3>` | Størrelse på pins |
-| `/d2map ore <on\|off>` | Malmårer, der står fremme nu, aflæst af Forever Dual Gathering (til som standard) |
+| `/d2map ore <on\|off>` | Det rigtige minimap under automappet, så dets egne malm- og urteprikker vises live (til som standard) |
+| `/d2map minimap <0-100>` | Minimappets gennemsigtighed under automappet (standard 40) |
+| `/d2map probe` | Forsøg: kan minimappet slås op uden musen? (svaret var nej i Forever) |
 | `/d2map rim <on\|off>` | Det, der ligger uden for rammen, som mærker på kanten: nærmeste pin for hver quest og guidens mål (fra som standard) |
 | `/d2map route <on\|off>` | En pull-rute gennem hver klynge af quest-mål (til som standard) |
 | `/d2map focus <on\|off>` | Pull-ruter kun om de quests, Factoruides aktuelle trin handler om (til som standard; uden guide: alle quests) |
@@ -104,28 +106,30 @@ En ny bruger ser altså ingenting, før figuren flytter sig.
   og `hidden` (Questies egne filtre). Adapteren læser kun; zone → verden huskes
   pr. ikon. Uden Questie bruges spillets egne quest-punkter
   (`C_QuestLog.GetQuestsOnMap`).
-- **Malmårer** (afsnit 6b, version 1.9.0). Kun årer, der står fremme **lige
-  nu** (Lars, 2026-11-21: «ikke hvor de kunne være»). Spillet fortæller ikke
-  addons, hvor minimappets gule prikker er; de kan kun aflæses ved at holde
-  musen over minimappet og læse tooltippen. Det gør **Forever Dual Gathering**
-  (FDG), også med sin egen HUD skjult (indstillingen «remember nodes»), og den
-  udleverer sine fund med `_G.FDGWorldMarkersNodeSource()` → `nodes`, en liste
-  af `{ map = uiMapID, x, y (0-1), kind = "ore"|"herb"|…, id = malmens
-  item-id, seen = GetTime(), centered/fastLocation/manualProvisional,
-  missingAt, observationTTL, … }`. D2Map læser kun listen og tegner en rude pr.
-  `kind == "ore"`, der er live efter FDG's egne regler (målt placering, set
-  inden for levetiden) og desuden: ikke `missingAt`, højst 60 s gammel, og ikke
-  lige mined. **Uden FDG slået til på figuren: ingen årer.**
-  **Hurtigt væk efter mining** (Lars: «så hurtigt som muligt efter den er
-  mined»): FDG fjerner selv fundet ved høst og ved et tomt tjek, men D2Map
-  venter ikke på det: `UNIT_SPELLCAST_SUCCEEDED` for spilleren med Mining
-  (2575/2576/3564/10248 eller navnet «Mining») gemmer stedet, åren inden for
-  10 yards skjules i samme frame, og pins hentes forfra (også efter 0,5 s). Ser
-  FDG åren igen senere (`seen` efter castet), er den groet frem og vises igen.
-  Farverne følger item-id'et: kobber orange, tin grå, sølv hvid, jern blå, guld
-  gul, mithril lyseblå, truesilver turkis, thorium grøn, dark iron rød, resten
-  lilla. 1.8.x viste i stedet *pladser* fra Questies database – det duede
-  ikke (og Questie har ingen malm i Forevers nye zoner som Riverglades).
+- **Det rigtige minimap under automappet** (afsnit 6b, version 1.10.0) – det
+  er sådan, malmårer (og urter) vises **live**. Lars, 2026-11-23: «vi har jo i
+  forvejen basically hele minimappet midt på skærmen … vi kan bare bruge native
+  prikker». Spillet siger ikke til addons, hvor minimappets prikker er, men det
+  tegner dem selv; derfor flyttes selve `Minimap`-rammen ind i automappet
+  (`SetParent(canvas)`, `CENTER`), i samme målestok (bredde = 2 ×
+  `C_Minimap.GetViewRadius()` × automappets pixels pr. yard), zoomet helt ud,
+  med CVar `rotateMinimap` = `/d2map rotate`, uden mus, og med børnene
+  (zoomknapper, addon-knapper, Questies minimap-pins) på alpha 0. Prikkerne
+  står så dér, hvor åren er, og forsvinder, i samme øjeblik den er mined.
+  Minimappets egen gennemsigtighed er `minimapAlpha` (standard 40 %, skyder i
+  vinduet, `/d2map minimap <0-100>`), ganget med automappets.
+  Alt gemmes før og lægges tilbage, når det slås fra («Minimap: In its corner»,
+  `/d2map ore off`), når automappet skjules (Alt+M), uden position (instances)
+  og ved log ud. Er `Minimap` beskyttet i combat, ændres intet før
+  `PLAYER_REGEN_ENABLED`. Opdateringsløkken sætter kun det, der har ændret sig,
+  så andre addons, der flytter minimappet tilbage, bliver rettet inden 0,1 s.
+  **Det, der blev prøvet først (1.8-1.9), og hvorfor det ikke duede:** pladser
+  fra Questies database (ikke live, og ingen data i Forevers nye zoner som
+  Riverglades); Forever Dual Gatherings fund (den lærer kun årer, når musen
+  står over minimappet, medmindre dens HUD flytter minimappet rundt under
+  musen); og selv at slå et punkt op med `Minimap:UpdateMouseoverAtPoint` +
+  `C_TooltipInfo.GetMinimapMouseover` – `/d2map probe` viste 1917 tomme svar,
+  også med `SetUsingSoftCursor`. Tooltippen svarer kun på den rigtige mus.
 - **To takter.** Pins *hentes* fra adapteren én gang i sekundet og *flyttes*
   hvert 0,1 sekund. `OnUpdate` sidder på selve rammen, så et skjult automap
   koster ingenting.
@@ -243,8 +247,8 @@ skiftes ud (ingen `C_Map`), og fliserne skal hentes med sti i stedet for fil-id.
 Lars' skærmbilleder og tilbagemeldinger 2026-11-11: terræn, bløde runde kanter,
 Questies pins og spillerens pil (1.0), indstillingsvinduet (1.1), klyngeformerne
 (1.3), guidens vej (1.4) og den lyse grønne prik (1.5.1) virker. Ikke set i
-spillet endnu: live-årerne fra Forever Dual Gathering (1.9.0, kun prøvet mod
-en attrap – især om Mining-castet har et af de kendte spell-id'er) og opslaget
+spillet endnu: minimappet under automappet (1.10.0, kun prøvet mod en attrap –
+især om prikkerne står præcis rigtigt, og om andre addons flytter minimappet tilbage) og opslaget
 i Questies nye modul (1.8.0), det samlede flueben for kanten (1.6.0), stregen til Shortest
 Path Forevers næste knæk (1.6.1) og begrænsningen til guidens aktuelle trin
 (1.7.0). Pull-ruterne (1.6.0) er set i spillet, men ikke gennemprøvet – især

@@ -34,7 +34,7 @@ end
 
 local function tom() end
 for _, navn in ipairs({
-    "SetFrameStrata", "SetMovable", "SetClampedToScreen", "SetClipsChildren", "RegisterForDrag",
+    "SetMovable", "SetClampedToScreen", "SetClipsChildren", "RegisterForDrag",
     "SetAllPoints", "SetMouseClickEnabled", "SetMouseMotionEnabled", "EnableMouseWheel",
     "ClearAllPoints", "StartMoving", "StopMovingOrSizing", "RegisterEvent", "UnregisterEvent",
     "SetAtlas", "SetColorTexture", "SetWidth", "SetHeight", "SetDesaturated", "SetBlendMode",
@@ -45,6 +45,8 @@ for _, navn in ipairs({
 end
 
 function Widget:SetFrameLevel(n) self.niveau = n end
+function Widget:SetFrameStrata(s) self.strata = s end
+function Widget:GetFrameStrata() return self.strata or "MEDIUM" end
 function Widget:GetFrameLevel() return self.niveau end
 function Widget:SetScript(navn, fn) self.scripts[navn] = fn end
 function Widget:EnableMouse(til) self.mus = til end
@@ -1009,122 +1011,113 @@ spiller.retning = 1.25
 slash("rotate off")
 slash("source auto")
 
-print("Malmårer, der står fremme nu (fra Forever Dual Gathering)")
-local RUDE = "Interface\\AddOns\\D2Map\\Media\\node.tga"
-local function aarer()
-    local t = {}
-    for _, p in ipairs(pins()) do if p.tekstur == RUDE then t[#t + 1] = p end end
-    return t
-end
-local function aareVed(nord, oest)
-    for _, p in ipairs(aarer()) do
-        if taet(p.punkter.CENTER.x, oest * px, 0.05) and taet(p.punkter.CENTER.y, nord * px, 0.05) then return p end
+print("Det rigtige minimap under automappet")
+-- En attrap af Minimap-rammen, der husker alt, hvad der sættes på den.
+local function nyMinimap()
+    local m = { foraelder = "MinimapCluster", punkter = { { "TOPRIGHT", "MinimapCluster", "TOPRIGHT", -10, -20 } },
+        b = 198, h = 198, skala = 0.64, alfa = 1, strata = "LOW", niveau = 3, mus = true, hjul = true, zoom = 3, beskyttet = false,
+        born = { { alfa = 1 }, { alfa = 0.5 } } }
+    for _, barn in ipairs(m.born) do
+        barn.SetAlpha = function(self, a) self.alfa = a end
+        barn.GetAlpha = function(self) return self.alfa end
     end
+    function m:GetParent() return self.foraelder end
+    function m:SetParent(f) self.foraelder = f end
+    function m:GetNumPoints() return #self.punkter end
+    function m:GetPoint(i) local p = self.punkter[i] if p then return p[1], p[2], p[3], p[4], p[5] end end
+    function m:ClearAllPoints() self.punkter = {} end
+    function m:SetPoint(a, b, c, d, e) self.punkter[#self.punkter + 1] = { a, b, c, d, e } end
+    function m:GetWidth() return self.b end
+    function m:GetHeight() return self.h end
+    function m:SetSize(b, h) self.b, self.h = b, h end
+    function m:GetScale() return self.skala end
+    function m:SetScale(s) self.skala = s end
+    function m:GetAlpha() return self.alfa end
+    function m:SetAlpha(a) self.alfa = a end
+    function m:GetFrameStrata() return self.strata end
+    function m:SetFrameStrata(s) self.strata = s end
+    function m:GetFrameLevel() return self.niveau end
+    function m:SetFrameLevel(n) self.niveau = n end
+    function m:IsMouseEnabled() return self.mus end
+    function m:EnableMouse(v) self.mus = v end
+    function m:IsMouseWheelEnabled() return self.hjul end
+    function m:EnableMouseWheel(v) self.hjul = v end
+    function m:GetZoom() return self.zoom end
+    function m:SetZoom(z) self.zoom = z end
+    function m:IsProtected() return self.beskyttet end
+    function m:GetChildren() return table.unpack(self.born) end
+    return m
 end
-local function sidsteStatus(tekst)
-    slash("status")
-    for i = #chat - 7, #chat do
-        if chat[i] and chat[i]:find("ore veins:", 1, true) then return chat[i]:find(tekst, 1, true) ~= nil, chat[i] end
-    end
-    return false, "ingen linje om ore veins"
-end
--- Et fund, som FDG har det: zonekort, x og y fra 0 til 1, slags, malmens item-id og hvornår det sidst blev set.
-local function fund(nord, oest, felter)
-    local x, y = zonePunkt(nord, oest)
-    local f = { map = ZONE.id, x = x / 100, y = y / 100, kind = "ore", id = 2770, seen = ur, centered = true }
-    for k, v in pairs(felter or {}) do f[k] = v end
-    return f
-end
-slash("pins off")                                      -- kun malmen, og den må ikke afhænge af quest-pins
-kor(1.2)
-tjek("standard: malmårer slået til", D2MapDB.ore == "on")
-tjek("uden Forever Dual Gathering vises ingen årer", #aarer() == 0)
-tjek("…og status siger, hvad der mangler", sidsteStatus("needs Forever Dual Gathering"))
-local hint = 0
-for _, linje in ipairs(chat) do if linje:find("enable it in the AddOns list", 1, true) then hint = hint + 1 end end
-tjek("…og det står i chatten, men kun én gang", hint == 1, hint)
-local fdg = {}
-FDGWorldMarkersNodeSource = function() return fdg, {}, {} end
-fdg = {
-    fund(60, 20),                                                  -- kobber, målt op: vises
-    fund(-80, 40, { id = 2771, centered = false, fastLocation = true }), -- tin, hurtig placering: vises
-    fund(100, -100, { id = 2775 }),                                -- sølv
-    fund(30, 150, { id = 2772 }),                                  -- jern
-    fund(-150, -50, { id = 3340 }),                                -- en sjælden slags uden egen farve
-    fund(10, 10, { centered = false }),                              -- kun en grov træffer: ikke målt endnu
-    fund(20, -20, { seen = ur - 200 }),                            -- set for over 3 min. siden: væk
-    fund(-20, 20, { kind = "herb", id = 2449 }),                   -- en urt: ikke malm
-    fund(40, -40, { anonymous = true }),                           -- slagsen ikke afgjort
-    fund(-40, -40, { centered = false, manualProvisional = true, cursorSweepObservation = true, seen = ur - 40 }), -- umålt sweep-fund, 40 s gammelt
-    fund(0, 2000),                                                 -- langt uden for rammen
-    fund(50, 50, { map = 9999 }),                                  -- et andet kontinent
-}
-kor(1.2)
-tjek("de live årer i rammen vises, én rude hver", #aarer() == 5 and #pins() == 5, #aarer())
-local kobber = aareVed(60, 20)
-tjek("en åre er en lille rude i malmens farve (kobber: orange)", kobber and kobber.bredde == 13
-    and kobber.farve[1] == 1 and taet(kobber.farve[2], 0.58), kobber and kobber.farve[2])
-tjek("tin er gråt, sølv hvidt, jern blåt", aareVed(-80, 40) and taet(aareVed(-80, 40).farve[1], 0.80)
-    and aareVed(100, -100).farve[3] == 1 and taet(aareVed(30, 150).farve[1], 0.45))
-tjek("en slags uden egen farve får den lilla", aareVed(-150, -50) and taet(aareVed(-150, -50).farve[1], 0.85))
-tjek("umålte, gamle, urter, uafklarede og fjerne fund vises ikke", not aareVed(10, 10) and not aareVed(20, -20)
-    and not aareVed(-20, 20) and not aareVed(40, -40) and not aareVed(-40, -40))
-tjek("årer giver ingen pull-ruter og intet på kanten", #linjer() == 0 and pinVed(280 * 0.90, 0) == nil)
-tjek("teksturen findes i addon'en", io.open("D2Map/Media/node.tga") ~= nil)
-tjek("status tæller de live årer", sidsteStatus("7 live from Forever Dual Gathering, 5 near you"))
-fdg[1].x = fdg[1].x + 30 / ZONE.bredde                 -- FDG har målt kobberet om: 30 yards længere mod øst
-kor(1.2)
-tjek("flytter FDG en åre, følger ruden med", aareVed(60, 50) ~= nil and aareVed(60, 20) == nil)
-fdg[1].seen = ur - 55
-fdg[3].observationTTL = 20
-fdg[3].seen = ur - 21
-kor(1.2)
-tjek("en åre lever i højst 60 s efter sidste bekræftelse, eller sin egen kortere levetid", aareVed(60, 50) ~= nil and aareVed(100, -100) == nil)
-ur = ur + 6
-kor(1.2)
-tjek("…og er så væk (ikke set igen i 60 s)", aareVed(60, 50) == nil and #aarer() == 3, #aarer())
-ur = ur - 6
-fdg[1].seen = ur
-fdg[4].missingAt = ur
-kor(1.2)
-tjek("savnede FDG åren ved sidste tjek, vises den ikke", aareVed(30, 150) == nil and aareVed(60, 50) ~= nil)
-fdg[4].missingAt = nil
--- Mine kobberet: gå hen til det (60 nord, 50 øst) og cast Mining.
-local hjemN, hjemV = spiller.nord, spiller.vest
-spiller.nord, spiller.vest = spiller.nord + 58, spiller.vest - 47
-kor(0.12)
-fyr("UNIT_SPELLCAST_SUCCEEDED", "player", "cast-1", 2575)
-root.scripts.OnUpdate(root, 0.001)                     -- samme frame som castet
-tjek("et Mining-cast skjuler åren ved figuren med det samme", aareVed(2, 3) == nil and aareVed(-28, 103) ~= nil)
-fyr("UNIT_SPELLCAST_SUCCEEDED", "player", "cast-2", 5019)    -- Shoot: ikke Mining
-fyr("UNIT_SPELLCAST_SUCCEEDED", "party1", "cast-3", 2575)    -- en andens Mining
-spiller.nord, spiller.vest = hjemN, hjemV
-kor(1.2)
-tjek("…og den forbliver væk, også når man går derfra", aareVed(60, 50) == nil and aareVed(30, 150) ~= nil)
-ur = ur + 1
-fdg[1].seen = ur                                       -- FDG ser den igen (groet frem)
-kor(1.2)
-tjek("ser FDG den igen senere, kommer den tilbage", aareVed(60, 50) ~= nil)
-table.remove(fdg, 2)
-kor(1.2)
-tjek("forsvinder en åre fra FDG's liste, forsvinder ruden", aareVed(-80, 40) == nil)
-FDGWorldMarkersNodeSource = function() error("FDG fejler") end
-kor(1.2)
-tjek("fejler FDG, er der bare ingen årer", #aarer() == 0 and root.synlig and sidsteStatus("gave no data"))
-FDGWorldMarkersNodeSource = function() return fdg end
-slash("ore vrøvl")
-tjek("et ukendt valg ændrer ingenting", D2MapDB.ore == "on")
+local cvars = { rotateMinimap = "0" }
+GetCVar = function(navn) return cvars[navn] end
+SetCVar = function(navn, v) cvars[navn] = tostring(v) end
+local radius = 233
+C_Minimap = { GetViewRadius = function() return radius end }
+Minimap = nyMinimap()
+local mm = Minimap
+slash("rotate off")
+kor(0.3)
+tjek("standard: minimappet under automappet", D2MapDB.ore == "on" and D2MapDB.minimapAlpha == 40)
+tjek("minimappet flyttes ind i automappets midte", mm.foraelder == canvas and #mm.punkter == 1
+    and mm.punkter[1][1] == "CENTER" and mm.punkter[1][2] == canvas)
+local bredde = 2 * radius * 560 / 500
+tjek("i automappets målestok: 2 × radius × pixels pr. yard", taet(mm.b, bredde) and taet(mm.h, bredde) and mm.skala == 1, mm.b)
+tjek("click-through: ingen mus og intet hjul", mm.mus == false and mm.hjul == false)
+tjek("zoomet helt ud og med sin egen gennemsigtighed", mm.zoom == 0 and taet(mm.alfa, 0.40))
+tjek("nord opad, som automappet", cvars.rotateMinimap == "0")
+tjek("knapper og andres pins på minimappet er usynlige", mm.born[1].alfa == 0 and mm.born[2].alfa == 0)
+slash("status")
+local fundet = false
+for i = #chat - 8, #chat do fundet = fundet or (chat[i] and chat[i]:find("minimap: on", 1, true) ~= nil) end
+tjek("/d2map status nævner minimappet", fundet)
+slash("rotate on")
+kor(0.3)
+tjek("drejer automappet, drejer minimappet med", cvars.rotateMinimap == "1")
+radius = 150                                           -- indendørs: minimappet viser mindre
+slash("zoom 300")
+kor(0.3)
+tjek("ny radius eller nyt zoom: størrelsen følger med", taet(mm.b, 2 * 150 * 560 / 300), mm.b)
+slash("minimap 70")
+kor(0.3)
+tjek("/d2map minimap 70 sætter dets gennemsigtighed", D2MapDB.minimapAlpha == 70 and taet(mm.alfa, 0.70))
+slash("toggle")
+tjek("skjules automappet, kommer minimappet tilbage i hjørnet", mm.foraelder == "MinimapCluster" and mm.punkter[1][1] == "TOPRIGHT"
+    and mm.punkter[1][4] == -10 and mm.b == 198 and mm.skala == 0.64 and mm.alfa == 1)
+tjek("…med mus, hjul, zoom, drejning og børn som før", mm.mus == true and mm.hjul == true and mm.zoom == 3
+    and cvars.rotateMinimap == "0" and mm.niveau == 3 and mm.born[1].alfa == 1 and mm.born[2].alfa == 0.5)
+slash("toggle")
+kor(0.3)
+tjek("vises det igen, flyttes minimappet igen", mm.foraelder == canvas)
+-- Combat: beskyttet minimap rører vi ikke.
+kamp, mm.beskyttet = true, true
+slash("ore off")
+tjek("i combat bliver et beskyttet minimap stående …", mm.foraelder == canvas)
+kamp = false
+fyr("PLAYER_REGEN_ENABLED")
+tjek("… og kommer tilbage, når combat er slut", mm.foraelder == "MinimapCluster" and mm.zoom == 3)
+mm.beskyttet = false
+slash("ore on")
+kor(0.3)
+tjek("/d2map ore on: under automappet igen", mm.foraelder == canvas)
+spiller.ingen = true                                   -- en instance: ingen position
+kor(0.3)
+tjek("uden position (instance) er minimappet tilbage i hjørnet", mm.foraelder == "MinimapCluster")
+spiller.ingen = false
+kor(0.3)
+tjek("…og under automappet igen bagefter", mm.foraelder == canvas)
+fyr("PLAYER_LOGOUT")
+tjek("log ud lægger minimappet tilbage", mm.foraelder == "MinimapCluster" and cvars.rotateMinimap == "0")
 slash("options")
-tjek("vinduet har et valg for malm, og det følger med", vindue.synlig and felt.ore.buttons[1].afkrydset == true and felt.ore.buttons[2].afkrydset == false)
+tjek("vinduet har valget og skyderen", felt.ore.buttons[1].afkrydset == true and felt.minimapAlpha.vaerdi == 70)
 felt.ore.buttons[2]:Klik()
-kor(1.2)
-tjek("valget Off fjerner årerne", D2MapDB.ore == "off" and #aarer() == 0 and sidsteStatus("ore veins: off"))
+tjek("«In its corner» giver minimappet tilbage", D2MapDB.ore == "off" and mm.foraelder == "MinimapCluster")
 felt.ore.buttons[1]:Klik()
 slash("options")
-slash("pins all")
-kor(1.2)
-tjek("quest-pins er tilbage, og årerne med dem", D2MapDB.ore == "on" and #aarer() >= 1 and #pins() > #aarer(), #pins())
-FDGWorldMarkersNodeSource = nil
+slash("rotate off")
+slash("zoom 500")
+slash("minimap 40")
+Minimap, C_Minimap, GetCVar, SetCVar = nil, nil, nil, nil
+kor(0.3)
 
 print("Forsøget /d2map probe")
 slash("probe")

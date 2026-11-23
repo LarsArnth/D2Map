@@ -54,7 +54,8 @@ local DEFAULTS = {
     pins           = "all",    -- all | objectives | off
     pinScale       = 1.0,      -- størrelsesfaktor for pins
     pinBoost       = 2.0,      -- pins er så mange gange mere synlige end terrænet
-    ore            = "on",     -- malmårer, der står fremme nu (fra Forever Dual Gathering): on | off
+    ore            = "on",     -- det rigtige minimap under automappet (live malm- og urteprikker): on | off
+    minimapAlpha   = 40,       -- minimappets gennemsigtighed under automappet, i procent
     edgePins       = false,    -- vis det, der ligger uden for rammen, som mærker på kanten:
                                -- nærmeste pin for hver quest, og guidens mål
     route          = true,     -- tegn en pull-rute gennem hver klynge af quest-mål
@@ -80,13 +81,14 @@ local LIMITS = {
     combatOpacity = { 0, 100 },
     moveOpacity   = { 0, 100 },
     pullRange     = { 0, 60 },
+    minimapAlpha  = { 0, 100 },
     size          = { 200, 1400 },
     span          = { 150, 2000 },
     pinScale      = { 0.5, 3 },
 }
 
 -- Disse gemmes som hele tal (procent, pixels, yards).
-local WHOLE = { opacity = true, combatOpacity = true, moveOpacity = true, size = true, span = true, pullRange = true }
+local WHOLE = { minimapAlpha = true, opacity = true, combatOpacity = true, moveOpacity = true, size = true, span = true, pullRange = true }
 
 local SHAPES = { round = true, square = true, plain = true }
 local PIN_MODES = { all = true, objectives = true, off = true }
@@ -725,185 +727,182 @@ local function ActiveAdapter()
 end
 
 --------------------------------------------------------------------------------
--- 6b. Malmårer (mining nodes), der står fremme LIGE NU
+-- 6b. Det rigtige minimap under automappet (live malmårer)
 --
--- Lars, 2026-11-21: «du skal kun vise LIVE nodes, ikke hvor de kunne være».
--- Spillet fortæller ikke addons, hvilke årer der står fremme; minimappets gule
--- prikker kan kun aflæses ved at holde musen over dem og læse tooltippen. Det
--- gør Forever Dual Gathering (FDG) allerede, også når dens egen HUD er skjult
--- (indstillingen «remember nodes»), og den udleverer sine fund til andre
--- addons gennem _G.FDGWorldMarkersNodeSource(). D2Map læser kun dem og tegner
--- en farvet rude pr. åre. Uden FDG: ingen årer.
+-- Lars, 2026-11-23: «vi har jo i forvejen basically hele minimappet midt på
+-- skærmen … vi behøver ikke engang lave prikker for ores, vi kan bare bruge
+-- native prikker». Spillet fortæller ikke addons, hvor minimappets prikker
+-- (malm, urter, Find Minerals) er, men det tegner dem selv. Så i stedet for at
+-- lede efter dem flyttes selve Minimap-rammen ind i automappet: samme midte,
+-- samme yards pr. pixel og samme drejning. Prikkerne står dermed præcis dér,
+-- hvor åren er, og forsvinder i samme øjeblik, den er mined.
 --
--- Et fund er { map = uiMapID, x, y (0-1 på zonekortet), kind = "ore"|"herb"|…,
--- id = malmens item-id, seen = GetTime() ved sidste bekræftelse, … }. Det tæller
--- som live på samme betingelser, som FDG selv tegner det: placeringen er målt
--- (centered, fastLocation eller manualProvisional), og det er set inden for
--- sin levetid (observationTTL, ellers 180 s; et umålt sweep-fund kun 30 s).
---
--- Lars: åren skal forsvinde «så hurtigt som muligt efter den er mined». FDG
--- fjerner selv et fund, når det høstes, og når et nyt tjek ikke finder det.
--- D2Map gør det hurtigere: (1) et fund, FDG lige har savnet ved et tjek
--- (missingAt), vises ikke; (2) lykkes et Mining-cast, skjules åren nærmest
--- figuren med det samme (til FDG ser den igen, dvs. når den er groet frem
--- igen), og listen hentes forfra; (3) højst NODE_MAX_AGE sekunder siden
--- sidste bekræftelse, ikke FDG's 3 minutter.
+-- Mens det står til, er der intet minimap i hjørnet (Alt+M giver det tilbage).
+--   størrelse  = 2 × minimappets radius i yards × automappets pixels pr. yard
+--   zoom       = 0 (helst langt ud, så det dækker mest af rammen)
+--   drejning   = CVar rotateMinimap følger /d2map rotate
+--   mus        = slået fra (klik og hjul går til spilverdenen)
+--   børn       = alpha 0 (zoomknapper, addon-knapper, Questies minimap-pins –
+--                automappet har sine egne), alpha tilbage bagefter
+-- Alt, der ændres, gemmes først og lægges tilbage, når det slås fra, når
+-- automappet skjules, og ved log ud. Er Minimap beskyttet i combat, ændres
+-- intet før efter combat.
 --------------------------------------------------------------------------------
 
-local CollectNodes, NodeStatus, RefreshOre, OnSpellcast
+local MinimapUpdate, MinimapRelease, MinimapStatus
 do                                 -- en blok, af samme grund som afsnit 8
 
-local NODE_TEXTURE = MEDIA .. "node.tga"   -- hvid rude med sort kant; farves pr. slags
-local NODE_TTL = 180               -- FDG's standardlevetid for et fund (sekunder)
-local NODE_SWEEP_TTL = 30          -- … og for et sweep-fund, der ikke er målt op
-local NODE_MAX_AGE = 60            -- D2Map viser højst så gamle fund (Lars: ikke 3 minutter)
-local MINED_YARDS = 10             -- et Mining-cast fjerner åren inden for så mange yards af figuren
-local MINED_KEEP = 300             -- sekunder et mined-mærke huskes (en åre gror ikke frem hurtigere)
-local MINING_SPELL_IDS = { [2575] = true, [2576] = true, [3564] = true, [10248] = true }
+local CHILD_SCAN = 1               -- sekunder mellem at minimappets børn gennemgås (nye addon-knapper)
 
--- Malmens item-id → farve på automappet (samme farver som i 1.8).
-local ORE_COLORS = {
-    [2770] = { 1.00, 0.58, 0.25 },   -- Copper
-    [2771] = { 0.80, 0.80, 0.80 },   -- Tin
-    [2775] = { 1.00, 1.00, 1.00 },   -- Silver
-    [2772] = { 0.45, 0.65, 1.00 },   -- Iron
-    [2776] = { 1.00, 0.85, 0.20 },   -- Gold
-    [3858] = { 0.50, 0.95, 1.00 },   -- Mithril
-    [7911] = { 0.40, 1.00, 0.80 },   -- Truesilver
-    [10620] = { 0.40, 0.90, 0.35 },  -- Thorium (small, rich, ooze covered)
-    [11370] = { 1.00, 0.30, 0.25 },  -- Dark Iron
-    [248815] = { 0.75, 1.00, 0.30 }, -- Heavy Thorium
-}
-local OTHER_COLOR = { 0.85, 0.55, 1.00 }         -- Incendicite, Bloodstone, Amber …
+local saved                        -- minimappets oprindelige tilstand, mens det står i automappet
+local dimmed = {}                  -- barn → dets oprindelige alpha
+local childScan = 0                -- GetTime() for sidste gennemgang af børnene
+local status = "off"
+local pendingRelease = false       -- skulle lægges tilbage, men det var combat
 
-local placed = setmetatable({}, { __mode = "k" })   -- fund → { map, x, y, continent, north, west }
-local mined = {}                   -- { time, continent, north, west } for de seneste Mining-casts
-local hinted = false               -- er det sagt i chatten, at FDG mangler?
-local status = "not checked yet"
-local liveTotal, liveNear = 0, 0
-
--- Er fundet live lige nu? Samme regler, som FDG bruger til sin egen HUD.
-local function IsLive(node, now)
-    if not (node.centered or node.fastLocation or node.manualProvisional) then return false end
-    if node.missingAt then return false end                              -- FDG savnede den ved sidste tjek
-    if node.anonymous and not node.manualRefined then return false end   -- slagsen er ikke afgjort endnu
-    local seen = node.seen
-    if not IsNumber(seen) then return false end
-    local ttl = IsNumber(node.observationTTL) and node.observationTTL or NODE_TTL
-    if IsNumber(node.manualExpiresAt) then ttl = min(ttl, node.manualExpiresAt - seen) end
-    if node.cursorSweepObservation and not node.manualRefined and not node.centered and not node.fastLocation then
-        ttl = min(ttl, NODE_SWEEP_TTL)
-    end
-    local age = now - seen
-    return age >= 0 and age <= min(ttl, NODE_MAX_AGE)
+local function Available()
+    return Minimap and type(Minimap.SetPoint) == "function" and type(Minimap.GetPoint) == "function"
+        and C_Minimap and type(C_Minimap.GetViewRadius) == "function"
 end
 
--- Er åren lige blevet mined (og ikke set igen siden)?
-local function WasMined(node, continent, north, west)
-    for i = 1, #mined do
-        local m = mined[i]
-        if m.continent == continent and node.seen <= m.time then
-            local dn, dw = north - m.north, west - m.west
-            if dn * dn + dw * dw <= MINED_YARDS * MINED_YARDS then return true end
-        end
-    end
-    return false
+-- Må minimappet flyttes lige nu? Ikke i combat, hvis det er beskyttet.
+local function Locked()
+    if not (InCombatLockdown and InCombatLockdown()) then return false end
+    if type(Minimap.IsProtected) ~= "function" then return false end
+    local ok, protected = pcall(Minimap.IsProtected, Minimap)
+    return not ok or IsSecret(protected) or protected == true
 end
 
--- Kaldes ved UNIT_SPELLCAST_SUCCEEDED for spilleren. Er det Mining, huskes
--- stedet, og pins hentes forfra med det samme og igen lidt efter (når FDG har
--- nået at fjerne fundet).
-local function IsMiningSpell(spellID)
-    if not IsNumber(spellID) then return false end
-    if MINING_SPELL_IDS[spellID] then return true end
-    local name
-    if C_Spell and C_Spell.GetSpellName then
-        local ok, text = pcall(C_Spell.GetSpellName, spellID)
-        if ok then name = text end
-    end
-    return not IsSecret(name) and name == "Mining"
-end
-
-function OnSpellcast(spellID)
-    if not db or db.ore == "off" or not IsMiningSpell(spellID) then return end
-    local continent, north, west = PlayerPosition()
-    if not continent then return end
-    local now = GetTime and GetTime() or 0
-    for i = #mined, 1, -1 do
-        if now - mined[i].time > MINED_KEEP then table.remove(mined, i) end
-    end
-    mined[#mined + 1] = { time = now, continent = continent, north = north, west = west }
-    forceSync, forceTick = true, true
-    if C_Timer and C_Timer.After then
-        C_Timer.After(0.5, function() forceSync, forceTick = true, true end)
+local function GetCVarValue(name)
+    local getter = (C_CVar and C_CVar.GetCVar) or GetCVar
+    if getter then
+        local ok, value = pcall(getter, name)
+        if ok and not IsSecret(value) then return value end
     end
 end
 
--- Fundets plads i verden. Huskes pr. fund, så længe kort og x/y er de samme.
-local function NodeWorld(node)
-    local map, x, y = node.map, node.x, node.y
-    if not (IsNumber(map) and IsNumber(x) and IsNumber(y)) then return end
-    local cached = placed[node]
-    if cached and cached.map == map and cached.x == x and cached.y == y then
-        return cached.continent, cached.north, cached.west
-    end
-    local continent, north, west = ZoneToWorld(map, x, y)
-    cached = cached or {}
-    cached.map, cached.x, cached.y = map, x, y
-    cached.continent, cached.north, cached.west = continent, north, west
-    placed[node] = cached
-    return continent, north, west
+local function SetCVarValue(name, value)
+    local setter = (C_CVar and C_CVar.SetCVar) or SetCVar
+    if setter then pcall(setter, name, value) end
 end
 
--- Lægger de live årer omkring spilleren efter de n pins, der allerede står i
--- out, og returnerer det nye antal. Kaldes, hver gang pins hentes (ca. hvert sekund).
-function CollectNodes(out, n, continent, north, west)
-    liveTotal, liveNear = 0, 0
-    if db.ore == "off" then
-        status = "off"
-        return n
+local function Call(method, ...)
+    if type(Minimap[method]) == "function" then
+        local ok, a, b = pcall(Minimap[method], Minimap, ...)
+        if ok then return a, b end
     end
-    local source = FDGWorldMarkersNodeSource
-    if type(source) ~= "function" then
-        status = "needs Forever Dual Gathering (it reads the live veins off the minimap)"
-        -- Én gang pr. session i chatten, ellers ser man bare ingenting (2026-11-21).
-        if not hinted then
-            hinted = true
-            Print("mining veins need Forever Dual Gathering: enable it in the AddOns list and /reload. "
-                .. "Its own HUD can stay off. /d2map ore off hides this.")
-        end
-        return n
+end
+
+-- Gemmer alt det, der bliver ændret.
+local function Grab()
+    saved = { points = {} }
+    saved.parent = Minimap:GetParent()
+    for i = 1, Call("GetNumPoints") or 0 do
+        saved.points[i] = { Minimap:GetPoint(i) }
     end
-    local ok, nodes = pcall(source)
-    if not ok or type(nodes) ~= "table" then
-        status = "Forever Dual Gathering gave no data" .. (ok and "" or (": " .. tostring(nodes)))
-        return n
-    end
-    local now = GetTime and GetTime() or 0
-    local radius = db.span                   -- rigeligt: kun det i rammen tegnes
-    for i = 1, #nodes do
-        local node = nodes[i]
-        if type(node) == "table" and node.kind == "ore" and IsLive(node, now) then
-            liveTotal = liveTotal + 1
-            local nodeContinent, nodeNorth, nodeWest = NodeWorld(node)
-            if nodeContinent == continent and abs(nodeNorth - north) < radius and abs(nodeWest - west) < radius
-                and not WasMined(node, nodeContinent, nodeNorth, nodeWest) then
-                liveNear = liveNear + 1
-                local color = ORE_COLORS[node.id] or OTHER_COLOR
-                n = n + 1
-                EmitPin(out, n, nodeContinent, nodeNorth, nodeWest, NODE_TEXTURE, color[1], color[2], color[3], "node")
+    saved.width, saved.height = Call("GetWidth"), Call("GetHeight")
+    saved.scale = Call("GetScale")
+    saved.alpha = Call("GetAlpha")
+    saved.strata, saved.level = Call("GetFrameStrata"), Call("GetFrameLevel")
+    saved.mouse = Call("IsMouseEnabled")
+    saved.wheel = Call("IsMouseWheelEnabled")
+    saved.zoom = Call("GetZoom")
+    saved.rotate = GetCVarValue("rotateMinimap")
+end
+
+-- Børnene (knapper, addon-ikoner, andres pins på minimappet) gøres usynlige.
+local function DimChildren(now)
+    if now - childScan < CHILD_SCAN and now >= childScan then return end
+    childScan = now
+    if type(Minimap.GetChildren) ~= "function" then return end
+    for _, child in ipairs({ Minimap:GetChildren() }) do
+        if type(child) == "table" and type(child.SetAlpha) == "function" then
+            if dimmed[child] == nil then
+                local ok, a = pcall(child.GetAlpha, child)
+                dimmed[child] = (ok and IsNumber(a)) and a or 1
             end
+            pcall(child.SetAlpha, child, 0)
         end
     end
-    status = ("%d live from Forever Dual Gathering, %d near you"):format(liveTotal, liveNear)
-    return n
 end
 
--- Ingenting at nulstille længere (FDG holder selv styr på sine fund).
-function RefreshOre() end
+-- Lægger alt tilbage, som det var.
+function MinimapRelease()
+    if not saved then
+        pendingRelease = false
+        return
+    end
+    if Locked() then
+        pendingRelease = true
+        status = "waiting for combat to end to give the minimap back"
+        return
+    end
+    pendingRelease = false
+    local s = saved
+    saved = nil
+    if s.parent then pcall(Minimap.SetParent, Minimap, s.parent) end
+    pcall(Minimap.ClearAllPoints, Minimap)
+    for _, p in ipairs(s.points) do pcall(Minimap.SetPoint, Minimap, p[1], p[2], p[3], p[4], p[5]) end
+    if IsNumber(s.width) and IsNumber(s.height) then Call("SetSize", s.width, s.height) end
+    if IsNumber(s.scale) then Call("SetScale", s.scale) end
+    if IsNumber(s.alpha) then Call("SetAlpha", s.alpha) end
+    if type(s.strata) == "string" then Call("SetFrameStrata", s.strata) end
+    if IsNumber(s.level) then Call("SetFrameLevel", s.level) end
+    if s.mouse ~= nil then Call("EnableMouse", s.mouse) end
+    if s.wheel ~= nil then Call("EnableMouseWheel", s.wheel) end
+    if IsNumber(s.zoom) then Call("SetZoom", s.zoom) end
+    if s.rotate ~= nil then SetCVarValue("rotateMinimap", s.rotate) end
+    for child, a in pairs(dimmed) do pcall(child.SetAlpha, child, a) end
+    wipe(dimmed)
+    status = "off (the minimap is back in its corner)"
+end
 
--- Til /d2map status.
-function NodeStatus()
+-- Holder minimappet på plads under automappet. Kaldes ved hver opdatering.
+function MinimapUpdate()
+    local want = db.ore == "on" and db.enabled and root and root:IsShown()
+    if not want then
+        if saved or pendingRelease then MinimapRelease() end
+        if db.ore ~= "on" then status = "off" end
+        return
+    end
+    if not Available() then
+        status = "this client has no minimap API to borrow"
+        return
+    end
+    if Locked() then
+        if not saved then status = "waiting for combat to end" end
+        return
+    end
+    if not saved then Grab() end
+    local ok, radius = pcall(C_Minimap.GetViewRadius)
+    if not ok or not IsNumber(radius) or radius <= 0 then
+        status = "the minimap's radius is unknown"
+        return
+    end
+    local width = 2 * radius * db.size / db.span
+    -- Kun det, der faktisk har ændret sig, sættes: alt kostede et kald hver frame.
+    if Minimap:GetParent() ~= canvas then Call("SetParent", canvas) end
+    local point, relative = Minimap:GetPoint(1)
+    if Call("GetNumPoints") ~= 1 or point ~= "CENTER" or relative ~= canvas then
+        Call("ClearAllPoints")
+        Call("SetPoint", "CENTER", canvas, "CENTER", 0, 0)
+    end
+    if abs((Call("GetWidth") or 0) - width) > 0.5 then Call("SetSize", width, width) end
+    if Call("GetScale") ~= 1 then Call("SetScale", 1) end
+    local alphaWanted = db.minimapAlpha / 100
+    if abs((Call("GetAlpha") or 0) - alphaWanted) > 0.001 then Call("SetAlpha", alphaWanted) end
+    if Call("GetFrameStrata") ~= canvas:GetFrameStrata() then Call("SetFrameStrata", canvas:GetFrameStrata()) end
+    if Call("GetFrameLevel") ~= canvas:GetFrameLevel() + 1 then Call("SetFrameLevel", canvas:GetFrameLevel() + 1) end
+    if Call("IsMouseEnabled") ~= false then Call("EnableMouse", false) end
+    if Call("IsMouseWheelEnabled") then Call("EnableMouseWheel", false) end
+    if Call("GetZoom") ~= 0 then Call("SetZoom", 0) end
+    local rotate = db.rotate and "1" or "0"
+    if GetCVarValue("rotateMinimap") ~= rotate then SetCVarValue("rotateMinimap", rotate) end
+    DimChildren(GetTime and GetTime() or 0)
+    status = ("on: the minimap's own icons under the automap (%.0f yards around you)"):format(radius)
+end
+
+function MinimapStatus()
     return status
 end
 
@@ -927,9 +926,7 @@ local wants = {}               -- hvilke slags pins brugeren vil se
 local questInView = {}         -- questID → true, når en af dens pins er inden for rammen
 local nearestRec, nearestDist, nearestX, nearestY = {}, {}, {}, {}
 
-local nodeError                -- fejlen fra malm-laget, hvis det er gået galt (til /d2map status)
-
-local function SyncPins(continent, north, west)
+local function SyncPins()
     forceSync = false
     recordCount = 0
     activeAdapterName = "none"
@@ -946,13 +943,6 @@ local function SyncPins(continent, north, west)
         else
             activeAdapterName = activeAdapterName .. " (error: " .. tostring(count) .. ")"
         end
-    end
-    -- Malmårerne lægges efter quest-pins, så de aldrig tager pladsen fra dem.
-    local ok, count = pcall(CollectNodes, records, recordCount, continent, north, west)
-    if ok then
-        recordCount, nodeError = count, nil
-    else
-        nodeError = tostring(count)
     end
 end
 
@@ -2001,6 +1991,9 @@ local function Tick(elapsed)
             hasPosition = false
         end
         lastNorth, moving = nil, false
+        -- Automappet er tomt her, så minimappet skal tilbage i hjørnet (ellers
+        -- var der intet minimap i instances).
+        MinimapRelease()
         return
     end
     if hasPosition ~= true then
@@ -2030,13 +2023,14 @@ local function Tick(elapsed)
     sinceSync = sinceSync + elapsed
     if forceSync or sinceSync >= db.pinSyncInterval then
         sinceSync = 0
-        SyncPins(continent, north, west)
+        SyncPins()
         BuildLoops(continent, north, west)
     end
     UpdatePins(continent, north, west)
     UpdateLoops(north, west)
 
     UpdatePath(continent, north, west, elapsed)
+    MinimapUpdate()
 
     -- Pilen viser figurens retning på kortet: lige op, når kortet drejer med.
     if arrow.SetRotation then arrow:SetRotation((facing or 0) - viewAngle) end
@@ -2072,8 +2066,10 @@ local function ApplyEnabled()
         forceSync = true
         SnapAlpha()
         root:Show()
+        MinimapUpdate()
     else
         root:Hide()
+        MinimapUpdate()                -- giver minimappet tilbage til hjørnet
     end
 end
 
@@ -2103,14 +2099,15 @@ local AFTER = {
     pinScale = Redraw,
     edgePins = Redraw,
     terrain  = Redraw,
-    rotate   = Redraw,
     waypoint = function() RefetchPath() Redraw() end,
     route    = Resync,
     pullRange = Resync,
     routeFocus = Resync,
     pins     = Resync,
     source   = Resync,
-    ore      = function() RefreshOre() Resync() end,
+    ore      = function() MinimapUpdate() end,
+    minimapAlpha = function() MinimapUpdate() end,
+    rotate   = function() Redraw() MinimapUpdate() end,
 }
 
 local function Set(key, value)
@@ -2311,9 +2308,12 @@ local function CreateOptions()
     byKey.pinScale = MakeSlider(frame, Row(38), "pinScale", LIMITS.pinScale[1], LIMITS.pinScale[2], 0.1, function(v)
         return ("Pin size: %.1fx"):format(v)
     end)
-    byKey.ore = MakeChoice(frame, Row(28), "Ore", "ore", {
-        { "on", "Live veins" }, { "off", "Off" },
+    byKey.ore = MakeChoice(frame, Row(28), "Minimap", "ore", {
+        { "on", "Under the map" }, { "off", "In its corner" },
     })
+    byKey.minimapAlpha = MakeSlider(frame, Row(40), "minimapAlpha", 0, 100, 5, function(v)
+        return ("Minimap under the map (its own vein and herb icons): %d%%"):format(v)
+    end)
     byKey.edgePins = MakeCheck(frame, Row(26), "Show out-of-range targets on the rim", "edgePins")
     byKey.route = MakeCheck(frame, Row(26), "Draw a pull route through each cluster of objectives", "route")
     byKey.pullRange = MakeSlider(frame, Row(40), "pullRange", LIMITS.pullRange[1], LIMITS.pullRange[2], 5, function(v)
@@ -2474,7 +2474,8 @@ local function PrintHelp()
         "/d2map style <color|sepia|ghost> – terrain look (now " .. db.style .. ")",
         "/d2map pins <all|objectives|off> – which quest pins (now " .. db.pins .. ")",
         "/d2map pinsize <0.5-3> – pin scale (now " .. db.pinScale .. ")",
-        "/d2map ore <on|off> – mining veins that are up right now, read by Forever Dual Gathering (now " .. db.ore .. ")",
+        "/d2map ore <on|off> – put the real minimap under the automap, so its own live vein icons show there (now " .. db.ore .. ")",
+        "/d2map minimap <0-100> – opacity of the minimap under the automap (now " .. db.minimapAlpha .. ")",
         "/d2map rim <on|off> – out-of-range quest targets and the guide's goal as markers on the rim (now " .. OnOff(db.edgePins) .. ")",
         "/d2map route <on|off> – a pull route through each cluster of objectives (now " .. OnOff(db.route) .. ")",
         "/d2map pull <0-60> – how far the route may stay from the outermost targets, in yards (now " .. db.pullRange .. ")",
@@ -2508,7 +2509,7 @@ local function PrintStatus()
     end
     Print(("pins: %s, source %s, %d known, %d drawn%s"):format(
         db.pins, activeAdapterName, recordCount, pinsShown, mask and "" or "; no mask support, using hard edges"))
-    Print("ore veins: " .. NodeStatus() .. (nodeError and ("; error: " .. nodeError) or ""))
+    Print("minimap: " .. MinimapStatus())
     local clusters, link, pieces, focused = LoopStatus()
     Print(("pull routes: %s, %d clusters (objectives within %d yards belong together), pull range %d yards, %d line pieces drawn; map %s"):format(
         OnOff(db.route), clusters, link, db.pullRange, pieces, db.rotate and "rotates with you" or "north up"))
@@ -2609,6 +2610,9 @@ commands.style = function(rest) SetChoice("style", rest, STYLES, "style") end
 commands.pins = function(rest) SetChoice("pins", rest, PIN_MODES, "pins") end
 commands.pinsize = function(rest) SetNumber("pinScale", rest, "pinsize") end
 commands.ore = function(rest) SetChoice("ore", rest, ORE_MODES, "ore") end
+commands.minimap = function(rest)
+    if rest == "on" or rest == "off" then SetChoice("ore", rest, ORE_MODES, "minimap") else SetNumber("minimapAlpha", rest, "minimap") end
+end
 commands.mining = commands.ore
 commands.nodes = commands.ore
 commands.edge = function(rest) SetFlag("edgePins", rest, "rim markers") end
@@ -2813,11 +2817,12 @@ end
 -- Combat slut: tilbage til normal gennemsigtighed.
 function handlers.PLAYER_REGEN_ENABLED()
     inCombat = false
+    if MinimapUpdate then MinimapUpdate() end   -- det, der ventede på combat
 end
 
--- Et lykkedes cast: er det Mining, forsvinder åren med det samme (afsnit 6b).
-function handlers.UNIT_SPELLCAST_SUCCEEDED(unit, _, spellID)
-    if unit == "player" then OnSpellcast(spellID) end
+-- Log ud: minimappet tilbage i hjørnet, så intet hænger ved til næste gang.
+function handlers.PLAYER_LOGOUT()
+    if MinimapRelease then MinimapRelease() end
 end
 
 -- Ny zone: Questie tegner sine ikoner om, så hent dem straks.
